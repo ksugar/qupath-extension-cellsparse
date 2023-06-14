@@ -61,6 +61,17 @@ public abstract class AbstractCellsparseCommands {
 	}
 	
 	void CellsparseCommand(final ImageData<BufferedImage> imageData, final String endpointURL, final boolean train) {
+		CellsparseCommand(imageData, endpointURL, train, 1, 8, 200);
+	}
+	
+	void CellsparseCommand(
+			final ImageData<BufferedImage> imageData,
+			final String endpointURL,
+			final boolean train,
+			final int epochs,
+			final int batchsize,
+			final int steps
+	) {
 		final BufferedImage image = readRegionFromServer(
 				imageData.getServer(),
 				1.0,
@@ -108,9 +119,9 @@ public abstract class AbstractCellsparseCommands {
 				.b64lbl(strLabel)
 				.train(train)
 				.eval(true)
-				.epochs(10)
-				.batchsize(8)
-				.steps(8)
+				.epochs(epochs)
+				.batchsize(batchsize)
+				.steps(steps)
 				.build();
 		final String bodyJson = gson.toJson(body);
 		
@@ -131,6 +142,33 @@ public abstract class AbstractCellsparseCommands {
 				imageData.getHierarchy().removeObjects(toRomove, false);
 				List<PathObject> pathObjects = gson.fromJson(response.body(), type);
 				imageData.getHierarchy().addObjects(pathObjects);
+	        }
+			else {
+				Dialogs.showErrorMessage("Http error: " + response.statusCode(), response.body());
+			}
+		} catch (IOException | InterruptedException e) {
+			e.printStackTrace();
+			Dialogs.showErrorMessage(getClass().getName(), e);
+		}
+	}
+	
+	void CellsparseResetCommand(final String endpointURL) {
+		final Gson gson = GsonTools.getInstance();
+		final CellsparseResetBody body = CellsparseResetBody.newBuilder("default").build();
+		final String bodyJson = gson.toJson(body);
+		
+		final HttpRequest request = HttpRequest.newBuilder()
+		        .version(HttpClient.Version.HTTP_1_1)
+		        .uri(URI.create(endpointURL))
+		        .header("accept", "application/json")
+		        .header("Content-Type", "application/json; charset=utf-8")
+		        .POST(HttpRequest.BodyPublishers.ofString(bodyJson))
+		        .build();
+		HttpClient client = HttpClient.newHttpClient();
+		try {
+			HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+			if (response.statusCode() == HttpURLConnection.HTTP_OK) {
+				Dialogs.showMessageDialog("Model reset", "Model is reset");
 	        }
 			else {
 				Dialogs.showErrorMessage("Http error: " + response.statusCode(), response.body());
