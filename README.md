@@ -1,5 +1,7 @@
 # QuPath extension Cellsparse
 
+Train a deep learning model for cell segmentation in a few minutes from scratch.
+
 ![](https://github.com/ksugar/qupath-extension-cellsparse/releases/download/assets/cellsparse-demo.gif)
 
 This is a QuPath extension for [Cellsparse API](https://github.com/ksugar/cellsparse-api).
