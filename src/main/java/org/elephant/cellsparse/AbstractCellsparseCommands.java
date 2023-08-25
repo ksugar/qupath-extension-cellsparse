@@ -29,7 +29,7 @@ import qupath.lib.objects.PathObject;
 import qupath.lib.objects.classes.PathClass;
 
 public abstract class AbstractCellsparseCommands {
-	
+
 	private String base64Encode(final BufferedImage bufferedImage) {
 		String base64Image = null;
 		try {
@@ -42,15 +42,9 @@ public abstract class AbstractCellsparseCommands {
 		}
 		return base64Image;
 	}
-	
-	private BufferedImage readRegionFromServer(
-			final ImageServer<BufferedImage> imageServer,
-			final double downsample,
-			final int x,
-			final int y,
-			final int width,
-			final int height
-	) {
+
+	private BufferedImage readRegionFromServer(final ImageServer<BufferedImage> imageServer,
+			final double downsample, final int x, final int y, final int width, final int height) {
 		BufferedImage image = null;
 		try {
 			image = imageServer.readRegion(downsample, x, y, width, height);
@@ -59,91 +53,55 @@ public abstract class AbstractCellsparseCommands {
 		}
 		return image;
 	}
-	
-	void CellsparseCommand(final ImageData<BufferedImage> imageData, final String endpointURL, final boolean train) {
+
+	void CellsparseCommand(final ImageData<BufferedImage> imageData, final String endpointURL,
+			final boolean train) {
 		CellsparseCommand(imageData, endpointURL, train, 1, 8, 200);
 	}
-	
-	void CellsparseCommand(
-			final ImageData<BufferedImage> imageData,
-			final String endpointURL,
-			final boolean train,
-			final int epochs,
-			final int batchsize,
-			final int steps
-	) {
-		final BufferedImage image = readRegionFromServer(
-				imageData.getServer(),
-				1.0,
-				0,
-				0,
-				imageData.getServer().getWidth(),
-				imageData.getServer().getHeight()
-		);
+
+	void CellsparseCommand(final ImageData<BufferedImage> imageData, final String endpointURL,
+			final boolean train, final int epochs, final int batchsize, final int steps) {
+		final BufferedImage image = readRegionFromServer(imageData.getServer(), 1.0, 0, 0,
+				imageData.getServer().getWidth(), imageData.getServer().getHeight());
 		final String strImage = base64Encode(image);
 
 		final LabeledImageServer bgLabelServer = new LabeledImageServer.Builder(imageData)
-				.backgroundLabel(0)
-				.addLabel("Background", 1)
-				.multichannelOutput(false)
-				.build();
-		final BufferedImage bgImage = readRegionFromServer(
-				bgLabelServer,
-				1.0,
-				0,
-				0,
-				imageData.getServer().getWidth(),
-				imageData.getServer().getHeight()
-		);
-		final LabeledOffsetImageServer fgLabelServer = new LabeledOffsetImageServer.Builder(imageData)
-				.useFilter(pathObject -> pathObject.getPathClass() == PathClass.getInstance("Foreground"))
-				.useInstanceLabels()
-				.offset(1)
-				.build();
-		final BufferedImage fgImage = readRegionFromServer(
-				fgLabelServer,
-				1.0,
-				0,
-				0,
-				imageData.getServer().getWidth(),
-				imageData.getServer().getHeight()
-		);
+				.backgroundLabel(0).addLabel("Background", 1).multichannelOutput(false).build();
+		final BufferedImage bgImage = readRegionFromServer(bgLabelServer, 1.0, 0, 0,
+				imageData.getServer().getWidth(), imageData.getServer().getHeight());
+		final LabeledOffsetImageServer fgLabelServer =
+				new LabeledOffsetImageServer.Builder(imageData).useFilter(pathObject -> pathObject
+						.getPathClass() == PathClass.getInstance("Foreground")).useInstanceLabels()
+						.offset(1).build();
+		final BufferedImage fgImage = readRegionFromServer(fgLabelServer, 1.0, 0, 0,
+				imageData.getServer().getWidth(), imageData.getServer().getHeight());
 		final ImageCalculator imageCalculator = new ImageCalculator();
 		final ImagePlus bgImp = IJTools.convertToUncalibratedImagePlus("Background", bgImage);
 		final ImagePlus fgImp = IJTools.convertToUncalibratedImagePlus("Foreground", fgImage);
 		final BufferedImage lblImage = imageCalculator.run("Max", bgImp, fgImp).getBufferedImage();
 		final String strLabel = base64Encode(lblImage);
 		final Gson gson = GsonTools.getInstance();
-		final CellsparseBody body = CellsparseBody.newBuilder("default")
-				.b64img(strImage)
-				.b64lbl(strLabel)
-				.train(train)
-				.eval(true)
-				.epochs(epochs)
-				.batchsize(batchsize)
-				.steps(steps)
-				.build();
+		final CellsparseBody body =
+				CellsparseBody.newBuilder("default").b64img(strImage).b64lbl(strLabel).train(train)
+						.eval(true).epochs(epochs).batchsize(batchsize).steps(steps).build();
 		final String bodyJson = gson.toJson(body);
-		
-		final HttpRequest request = HttpRequest.newBuilder()
-		        .version(HttpClient.Version.HTTP_1_1)
-		        .uri(URI.create(endpointURL))
-		        .header("accept", "application/json")
-		        .header("Content-Type", "application/json; charset=utf-8")
-		        .POST(HttpRequest.BodyPublishers.ofString(bodyJson))
-		        .build();
+
+		final HttpRequest request = HttpRequest.newBuilder().version(HttpClient.Version.HTTP_1_1)
+				.uri(URI.create(endpointURL)).header("accept", "application/json")
+				.header("Content-Type", "application/json; charset=utf-8")
+				.POST(HttpRequest.BodyPublishers.ofString(bodyJson)).build();
 		HttpClient client = HttpClient.newHttpClient();
-		final Type type = new com.google.gson.reflect.TypeToken<List<PathObject>>(){}.getType();
+		final Type type = new com.google.gson.reflect.TypeToken<List<PathObject>>() {}.getType();
 		try {
-			HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+			HttpResponse<String> response =
+					client.send(request, HttpResponse.BodyHandlers.ofString());
 			if (response.statusCode() == HttpURLConnection.HTTP_OK) {
-				List<PathObject> toRomove = imageData.getHierarchy().getAnnotationObjects()
-						.stream().filter(pathObject -> pathObject.getPathClass() == null).toList();
+				List<PathObject> toRomove = imageData.getHierarchy().getAnnotationObjects().stream()
+						.filter(pathObject -> pathObject.getPathClass() == null).toList();
 				imageData.getHierarchy().removeObjects(toRomove, false);
 				List<PathObject> pathObjects = gson.fromJson(response.body(), type);
 				imageData.getHierarchy().addObjects(pathObjects);
-	        }
-			else {
+			} else {
 				Dialogs.showErrorMessage("Http error: " + response.statusCode(), response.body());
 			}
 		} catch (IOException | InterruptedException e) {
@@ -151,26 +109,23 @@ public abstract class AbstractCellsparseCommands {
 			Dialogs.showErrorMessage(getClass().getName(), e);
 		}
 	}
-	
+
 	void CellsparseResetCommand(final String endpointURL) {
 		final Gson gson = GsonTools.getInstance();
 		final CellsparseResetBody body = CellsparseResetBody.newBuilder("default").build();
 		final String bodyJson = gson.toJson(body);
-		
-		final HttpRequest request = HttpRequest.newBuilder()
-		        .version(HttpClient.Version.HTTP_1_1)
-		        .uri(URI.create(endpointURL))
-		        .header("accept", "application/json")
-		        .header("Content-Type", "application/json; charset=utf-8")
-		        .POST(HttpRequest.BodyPublishers.ofString(bodyJson))
-		        .build();
+
+		final HttpRequest request = HttpRequest.newBuilder().version(HttpClient.Version.HTTP_1_1)
+				.uri(URI.create(endpointURL)).header("accept", "application/json")
+				.header("Content-Type", "application/json; charset=utf-8")
+				.POST(HttpRequest.BodyPublishers.ofString(bodyJson)).build();
 		HttpClient client = HttpClient.newHttpClient();
 		try {
-			HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+			HttpResponse<String> response =
+					client.send(request, HttpResponse.BodyHandlers.ofString());
 			if (response.statusCode() == HttpURLConnection.HTTP_OK) {
 				Dialogs.showMessageDialog("Model reset", "Model is reset");
-	        }
-			else {
+			} else {
 				Dialogs.showErrorMessage("Http error: " + response.statusCode(), response.body());
 			}
 		} catch (IOException | InterruptedException e) {
