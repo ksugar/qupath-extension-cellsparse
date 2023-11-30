@@ -42,7 +42,7 @@ dependencies {
     // Main QuPath user interface jar.
     // Automatically includes other QuPath jars as subdependencies.
     shadow "io.github.qupath:qupath-gui-fx:${qupathVersion}"
-
+    
     // For logging - the version comes from QuPath's version catalog at
     // https://github.com/qupath/qupath/blob/main/gradle/libs.versions.toml
     // See https://docs.gradle.org/current/userguide/platforms.html
@@ -52,9 +52,11 @@ dependencies {
     shadow libs.bundles.groovy
 
     testImplementation "io.github.qupath:qupath-gui-fx:${qupathVersion}"
+    testImplementation "io.github.qupath:qupath-extension-processing:${qupathVersion}"
     testImplementation libs.junit
 
     // Add additional dependencies here
+    shadow "io.github.qupath:qupath-extension-processing:${qupathVersion}"
 }
 
 

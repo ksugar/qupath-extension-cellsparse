@@ -9,7 +9,7 @@
 		<dependency>
 			<groupId>io.github.qupath</groupId>
 			<artifactId>qupath-gui-fx</artifactId>
-			<version>0.4.3</version>
+			<version>0.4.4</version>
 		</dependency>
 		<dependency>
 			<groupId>org.slf4j</groupId>
