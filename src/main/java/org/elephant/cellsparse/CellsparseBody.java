@@ -1,6 +1,5 @@
 package org.elephant.cellsparse;
 
-
 public class CellsparseBody {
 
 	@SuppressWarnings("unused")
@@ -31,7 +30,7 @@ public class CellsparseBody {
 		this.steps = builder.steps;
 	}
 
-	static class Builder {
+	public static class Builder {
 		private String modelname;
 		private String b64img;
 		private String b64lbl = null;
