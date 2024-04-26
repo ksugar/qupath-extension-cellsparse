@@ -1,0 +1,122 @@
+package org.elephant.cellsparse.tasks;
+
+import java.awt.image.BufferedImage;
+import java.io.IOException;
+import java.lang.reflect.Type;
+import java.net.HttpURLConnection;
+import java.net.http.HttpResponse;
+import java.util.Collections;
+import java.util.List;
+import java.util.Objects;
+
+import org.elephant.cellsparse.models.CellsparseModel;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import com.google.gson.Gson;
+
+import qupath.lib.gui.viewer.QuPathViewer;
+import qupath.lib.images.ImageData;
+import qupath.lib.io.GsonTools;
+import qupath.lib.objects.PathObject;
+
+public class CellsparseInferTask extends CellsparseTask {
+
+    private static final Logger logger = LoggerFactory.getLogger(CellsparseInferTask.class);
+
+    private final ImageData<BufferedImage> imageData;
+    private final String endpointURL;
+    private final CellsparseModel model;
+
+    public CellsparseInferTask(Builder builder) {
+        QuPathViewer viewer = builder.viewer;
+        Objects.requireNonNull(builder, "Viewer must not be null!");
+
+        this.imageData = viewer.getImageData();
+        this.endpointURL = builder.endpointURL;
+        this.model = builder.model;
+    }
+
+    @Override
+    protected List<PathObject> call() throws Exception {
+        final BufferedImage image = readRegionFromServer(imageData.getServer(), 1.0, 0, 0,
+                imageData.getServer().getWidth(), imageData.getServer().getHeight());
+        final String strImage = base64Encode(image);
+
+        final Gson gson = GsonTools.getInstance();
+        final String bodyJson = model.getRequestBodyStringInfer(strImage);
+        final Type type = new com.google.gson.reflect.TypeToken<List<PathObject>>() {
+        }.getType();
+        try {
+            HttpResponse<String> response = CellsparseInferTask.sendRequest(endpointURL, bodyJson);
+            if (response.statusCode() == HttpURLConnection.HTTP_OK) {
+                return gson.fromJson(response.body(), type);
+            } else {
+                logger.warn(String.format("HTTP error: %d\n%s", response.statusCode(), response.body()));
+                return Collections.emptyList();
+            }
+        } catch (IOException | InterruptedException e) {
+            logger.warn("Interrupted while sending request to server", e);
+            return Collections.emptyList();
+        }
+    }
+
+    /**
+     * New builder for a CellsparseInferTask class.
+     * 
+     * @param viewer
+     *               the viewer containing the image to be processed
+     * @return the builder
+     */
+    public static Builder builder(QuPathViewer viewer) {
+        return new Builder(viewer);
+    }
+
+    /**
+     * Builder for a CellsparseInferTask class.
+     */
+    public static class Builder {
+
+        private QuPathViewer viewer;
+
+        private String endpointURL;
+        private CellsparseModel model;
+
+        private Builder(QuPathViewer viewer) {
+            this.viewer = viewer;
+        }
+
+        /**
+         * Specify the server URL (required).
+         * 
+         * @param endpointURL
+         * @return this builder
+         */
+        public Builder endpointURL(final String endpointURL) {
+            this.endpointURL = endpointURL;
+            return this;
+        }
+
+        /**
+         * Specify the model (required).
+         * 
+         * @param model
+         * @return this builder
+         */
+        public Builder model(final CellsparseModel model) {
+            this.model = model;
+            return this;
+        }
+
+        /**
+         * Build the detection task.
+         * 
+         * @return
+         */
+        public CellsparseInferTask build() {
+            return new CellsparseInferTask(this);
+        }
+
+    }
+
+}

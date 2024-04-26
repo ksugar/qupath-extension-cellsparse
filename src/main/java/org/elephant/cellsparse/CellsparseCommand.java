@@ -4,7 +4,7 @@ import java.awt.image.BufferedImage;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-import org.elephant.cellsparse.CellsparseModels.CellsparseModel;
+import org.elephant.cellsparse.models.CellsparseModel;
 import org.elephant.cellsparse.ui.CellsparsePane;
 import org.elephant.cellsparse.ui.CellsparseUIUtils;
 
@@ -74,6 +74,10 @@ public class CellsparseCommand implements Runnable {
      */
     private final ObservableSet<Task<?>> currentTasks = FXCollections.observableSet();
 
+    public ObservableSet<Task<?>> getCurrentTasks() {
+        return currentTasks;
+    }
+
     /**
      * Currently awaiting a detection from the server
      */
@@ -114,7 +118,8 @@ public class CellsparseCommand implements Runnable {
     }
 
     /**
-     * Timestamp of the last info text representing an error. This can be used for styling,
+     * Timestamp of the last info text representing an error. This can be used for
+     * styling,
      * and/or to ensure that errors remain visible for a minimum amount of time.
      */
     private LongProperty infoTextErrorTimestampProperty = new SimpleLongProperty(0);
@@ -132,11 +137,17 @@ public class CellsparseCommand implements Runnable {
      */
     private ExecutorService pool;
 
+    public ExecutorService getPool() {
+        if (pool == null)
+            pool = Executors.newCachedThreadPool(ThreadTools.createThreadFactory("Cellsparse", true));
+        return pool;
+    }
+
     /**
      * Constructor.
      * 
      * @param qupath
-     *            main QuPath instance
+     *               main QuPath instance
      */
     public CellsparseCommand(QuPathGUI qupath) {
         this.qupath = qupath;

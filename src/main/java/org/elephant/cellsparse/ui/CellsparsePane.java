@@ -1,23 +1,34 @@
 package org.elephant.cellsparse.ui;
 
 import org.elephant.cellsparse.CellsparseCommand;
-import org.elephant.cellsparse.CellsparseModels;
-import org.elephant.cellsparse.CellsparseModels.CellsparseModel;
+import org.elephant.cellsparse.models.CellposeModel;
+import org.elephant.cellsparse.models.CellsparseModel;
+import org.elephant.cellsparse.models.ElephantModel;
+import org.elephant.cellsparse.models.StarDistModel;
+import org.elephant.cellsparse.tasks.CellsparseInferTask;
+import org.elephant.cellsparse.tasks.CellsparseResetTask;
+import org.elephant.cellsparse.tasks.CellsparseTrainTask;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.awt.image.BufferedImage;
+import java.net.MalformedURLException;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 
+import javafx.application.Platform;
 import javafx.beans.binding.Bindings;
 import javafx.beans.property.ReadOnlyObjectProperty;
 import javafx.beans.value.ChangeListener;
 import javafx.beans.value.ObservableValue;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
+import javafx.concurrent.Task;
+import javafx.concurrent.Worker;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Node;
@@ -43,6 +54,8 @@ import qupath.lib.gui.tools.PaneTools;
 import qupath.lib.images.ImageData;
 import qupath.lib.images.servers.ImageServer;
 import qupath.lib.images.servers.PixelCalibration;
+import qupath.lib.objects.PathObject;
+import qupath.lib.objects.hierarchy.PathObjectHierarchy;
 import qupath.process.gui.commands.ml.PixelClassifierUI;
 
 public class CellsparsePane extends GridPane {
@@ -70,7 +83,7 @@ public class CellsparsePane extends GridPane {
      * Create a new main pane for the Cellsparse command.
      * 
      * @param command
-     *            The Cellsparse command.
+     *                The Cellsparse command.
      */
     public CellsparsePane(CellsparseCommand command, final QuPathGUI qupath) {
         super();
@@ -206,11 +219,11 @@ public class CellsparsePane extends GridPane {
     }
 
     private void addModelPrompt(int row) {
-        ComboBox<CellsparseModel> combo = new ComboBox<>();
+        final ComboBox<CellsparseModel> combo = new ComboBox<>();
         combo.getItems().addAll(
-                new CellsparseModels.StarDistModel(),
-                new CellsparseModels.CellposeModel(),
-                new CellsparseModels.ElephantModel());
+                new StarDistModel(),
+                new CellposeModel(),
+                new ElephantModel());
 
         combo.getSelectionModel().select(command.getModelIndexProperty().get());
         command.getModelIndexProperty().bind(combo.getSelectionModel().selectedIndexProperty());
@@ -226,7 +239,7 @@ public class CellsparsePane extends GridPane {
 
         Button btnEditModel = new Button("Edit");
         btnEditModel.setOnAction(e -> {
-            var model = combo.getSelectionModel().selectedItemProperty().get();
+            CellsparseModel model = combo.getSelectionModel().selectedItemProperty().get();
             if (model == null) {
                 Dialogs.showErrorMessage("Edit parameters", "No model selected!");
             }
@@ -308,8 +321,7 @@ public class CellsparsePane extends GridPane {
         btnReset.setTooltip(
                 new Tooltip("Reset a previously trained model, or load a new model from a file"));
         btnReset.setOnAction(e -> {
-            // TODO: reset model
-            logger.debug("reset model");
+            submitResetTask();
         });
         btnReset.disableProperty().bind(qupath.projectProperty().isNull());
 
@@ -331,12 +343,21 @@ public class CellsparsePane extends GridPane {
         var btnTrain = new Button("Train");
         btnTrain.setTooltip(new Tooltip("Train a model"));
         btnTrain.setOnAction(e -> {
-            // TODO: Train model
+            submitTrainTask();
             logger.debug("Train model");
         });
         btnTrain.disableProperty().bind(qupath.projectProperty().isNull());
 
-        var paneCommand = PaneTools.createColumnGridControls(btnTrain);
+        // Inference
+        var btnInfer = new Button("Infer");
+        btnInfer.setTooltip(new Tooltip("Run inference"));
+        btnInfer.setOnAction(e -> {
+            submitInferTask();
+            logger.debug("Run inference");
+        });
+        btnInfer.disableProperty().bind(qupath.projectProperty().isNull());
+
+        var paneCommand = PaneTools.createColumnGridControls(btnTrain, btnInfer);
         add(paneCommand, 0, row, GridPane.REMAINING, 1);
     }
 
@@ -357,6 +378,199 @@ public class CellsparsePane extends GridPane {
         }, command.getInfoTextErrorTimestampProperty()));
         GridPane.setFillWidth(labelInfo, true);
         add(labelInfo, 0, row, GridPane.REMAINING, 1);
+    }
+
+    /**
+     * Handle a change in task state.
+     * 
+     * @param task
+     * @param newValue
+     */
+    private void taskStateChange(Task<?> task, Worker.State newValue) {
+        switch (newValue) {
+            case SUCCEEDED:
+                logger.debug("Task completed successfully");
+                command.getCurrentTasks().remove(task);
+                break;
+            case CANCELLED:
+                logger.info("Task cancelled");
+                command.getCurrentTasks().remove(task);
+                if (task.getException() != null) {
+                    logger.warn("Task failed: {}", task, task.getException());
+                    command.updateInfoTextWithError("Task cancelled with exception " + task.getException() +
+                            "\nSee log for details.");
+                } else {
+                    command.updateInfoText("Task cancelled");
+                }
+                break;
+            case FAILED:
+                command.getCurrentTasks().remove(task);
+                if (task.getException() != null) {
+                    logger.warn("Task failed: {}", task, task.getException());
+                    command.updateInfoTextWithError("Task failed with exception " + task.getException() +
+                            "\nSee log for details.");
+                } else {
+                    command.updateInfoTextWithError("Task failed!");
+                }
+                break;
+            case RUNNING:
+                logger.trace("Task running");
+                break;
+            case SCHEDULED:
+                logger.trace("Task scheduled");
+                break;
+            default:
+                logger.debug("Task state changed to {}", newValue);
+        }
+    }
+
+    private void submitTask(Task<?> task) {
+        task.setOnFailed(event -> {
+            Platform.runLater(() -> {
+                Dialogs.showErrorMessage("Connection failed",
+                        "Please check that the samapi server (v0.4 and above) is running and the URL is correct.");
+            });
+        });
+        command.getPool().submit(task);
+        command.getCurrentTasks().add(task);
+        task.stateProperty().addListener((observable, oldValue, newValue) -> taskStateChange(task, newValue));
+    }
+
+    /**
+     * Submit a task to run training.
+     * 
+     */
+    private void submitTrainTask() {
+        logger.info("Submitting task for training");
+        CellsparseModel model = command.getModelProperty().get();
+        if (model == null) {
+            Dialogs.showErrorMessage("submitTrainTask", "No model selected!");
+        }
+        String url = null;
+        try {
+            url = new URI(command.getServerURLProperty().get())
+                    .resolve(model.getEndpoint())
+                    .normalize()
+                    .toURL()
+                    .toString();
+        } catch (URISyntaxException | MalformedURLException e) {
+            logger.warn("{} is not a valid URL.", command.getServerURLProperty().get());
+        }
+        if (url == null)
+            return;
+        if (!url.endsWith("/")) {
+            url += "/";
+        }
+        CellsparseTrainTask task = CellsparseTrainTask.builder(qupath.getViewer())
+                .endpointURL(url.toString())
+                .model(model)
+                .build();
+        task.setOnSucceeded(event -> {
+            List<PathObject> detected = task.getValue();
+            if (detected != null && !task.getValue().isEmpty()) {
+                if (!detected.isEmpty()) {
+                    Platform.runLater(() -> {
+                        PathObjectHierarchy hierarchy = qupath.getViewer().getImageData().getHierarchy();
+                        List<PathObject> toRomove = hierarchy.getAnnotationObjects().stream()
+                                .filter(pathObject -> pathObject.getPathClass() == null).toList();
+                        hierarchy.removeObjects(toRomove, false);
+                        hierarchy.addObjects(detected);
+                        hierarchy.getSelectionModel().setSelectedObjects(detected, detected.get(0));
+                    });
+                } else {
+                    logger.warn("No objects detected");
+                }
+            }
+        });
+        submitTask(task);
+    }
+
+    /**
+     * Submit a task to run inference.
+     * 
+     */
+    private void submitInferTask() {
+        logger.info("Submitting task for inference");
+        CellsparseModel model = command.getModelProperty().get();
+        if (model == null) {
+            Dialogs.showErrorMessage("submitInferTask", "No model selected!");
+        }
+        String url = null;
+        try {
+            url = new URI(command.getServerURLProperty().get())
+                    .resolve(model.getEndpoint())
+                    .normalize()
+                    .toURL()
+                    .toString();
+        } catch (URISyntaxException | MalformedURLException e) {
+            logger.warn("{} is not a valid URL.", command.getServerURLProperty().get());
+        }
+        if (url == null)
+            return;
+        if (!url.endsWith("/")) {
+            url += "/";
+        }
+        CellsparseInferTask task = CellsparseInferTask.builder(qupath.getViewer())
+                .endpointURL(url.toString())
+                .model(model)
+                .build();
+        task.setOnSucceeded(event -> {
+            List<PathObject> detected = task.getValue();
+            if (detected != null && !task.getValue().isEmpty()) {
+                if (!detected.isEmpty()) {
+                    Platform.runLater(() -> {
+                        PathObjectHierarchy hierarchy = qupath.getViewer().getImageData().getHierarchy();
+                        List<PathObject> toRomove = hierarchy.getAnnotationObjects().stream()
+                                .filter(pathObject -> pathObject.getPathClass() == null).toList();
+                        hierarchy.removeObjects(toRomove, false);
+                        hierarchy.addObjects(detected);
+                        hierarchy.getSelectionModel().setSelectedObjects(detected, detected.get(0));
+                    });
+                } else {
+                    logger.warn("No objects detected");
+                }
+            }
+        });
+        submitTask(task);
+    }
+
+    /**
+     * Submit a task to reset a model.
+     * 
+     */
+    private void submitResetTask() {
+        logger.info("Resetting a model");
+        CellsparseModel model = command.getModelProperty().get();
+        if (model == null) {
+            Dialogs.showErrorMessage("submitResetTask", "No model selected!");
+        }
+        if (!Dialogs.showConfirmDialog("Reset model", model.getParamterPaneReset())) {
+            logger.debug("Cancel reset model");
+            return;
+        }
+        String url = null;
+        try {
+            url = new URI(command.getServerURLProperty().get())
+                    .resolve(model.getEndpoint() + "/reset")
+                    .normalize()
+                    .toURL()
+                    .toString();
+        } catch (URISyntaxException | MalformedURLException e) {
+            logger.warn("{} is not a valid URL.", command.getServerURLProperty().get());
+        }
+        if (url == null)
+            return;
+        if (!url.endsWith("/")) {
+            url += "/";
+        }
+        CellsparseResetTask task = CellsparseResetTask.builder()
+                .endpointURL(url.toString())
+                .model(model)
+                .build();
+        task.setOnSucceeded(event -> {
+            command.updateInfoText("Model is reset.");
+        });
+        submitTask(task);
     }
 
 }
