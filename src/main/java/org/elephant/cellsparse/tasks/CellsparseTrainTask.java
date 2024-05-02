@@ -24,7 +24,9 @@ import qupath.lib.images.servers.LabeledImageServer;
 import qupath.lib.images.servers.LabeledOffsetImageServer;
 import qupath.lib.io.GsonTools;
 import qupath.lib.objects.PathObject;
+import qupath.lib.objects.PathROIObject;
 import qupath.lib.objects.classes.PathClass;
+import qupath.lib.regions.RegionRequest;
 
 public class CellsparseTrainTask extends CellsparseTask {
 
@@ -33,6 +35,7 @@ public class CellsparseTrainTask extends CellsparseTask {
     private final ImageData<BufferedImage> imageData;
     private final String endpointURL;
     private final CellsparseModel model;
+    private final RegionRequest regionRequest;
 
     public CellsparseTrainTask(Builder builder) {
         QuPathViewer viewer = builder.viewer;
@@ -41,25 +44,27 @@ public class CellsparseTrainTask extends CellsparseTask {
         this.imageData = viewer.getImageData();
         this.endpointURL = builder.endpointURL;
         this.model = builder.model;
+        if (builder.regionRequest == null) {
+            this.regionRequest = RegionRequest.createInstance(imageData.getServer());
+        } else {
+            this.regionRequest = builder.regionRequest;
+        }
     }
 
     @Override
     protected List<PathObject> call() throws Exception {
-        final BufferedImage image = readRegionFromServer(imageData.getServer(), 1.0, 0, 0,
-                imageData.getServer().getWidth(), imageData.getServer().getHeight());
+        final BufferedImage image = readRegionFromServer(imageData.getServer(), regionRequest);
         final String strImage = base64Encode(image);
 
         final LabeledImageServer bgLabelServer = new LabeledImageServer.Builder(imageData)
                 .backgroundLabel(0).addLabel("Background", 1).multichannelOutput(false).build();
-        final BufferedImage bgImage = readRegionFromServer(bgLabelServer, 1.0, 0, 0,
-                imageData.getServer().getWidth(), imageData.getServer().getHeight());
+        final BufferedImage bgImage = readRegionFromServer(bgLabelServer, regionRequest);
         final LabeledOffsetImageServer fgLabelServer = new LabeledOffsetImageServer.Builder(imageData)
                 .useFilter(pathObject -> pathObject
                         .getPathClass() == PathClass.getInstance("Foreground"))
                 .useInstanceLabels()
                 .offset(1).build();
-        final BufferedImage fgImage = readRegionFromServer(fgLabelServer, 1.0, 0, 0,
-                imageData.getServer().getWidth(), imageData.getServer().getHeight());
+        final BufferedImage fgImage = readRegionFromServer(fgLabelServer, regionRequest);
         final ImageCalculator imageCalculator = new ImageCalculator();
         final ImagePlus bgImp = IJTools.convertToUncalibratedImagePlus("Background", bgImage);
         final ImagePlus fgImp = IJTools.convertToUncalibratedImagePlus("Foreground", fgImage);
@@ -72,7 +77,11 @@ public class CellsparseTrainTask extends CellsparseTask {
         try {
             HttpResponse<String> response = CellsparseTrainTask.sendRequest(endpointURL, bodyJson);
             if (response.statusCode() == HttpURLConnection.HTTP_OK) {
-                return gson.fromJson(response.body(), type);
+                List<PathObject> pathObjects = gson.fromJson(response.body(), type);
+                for (PathObject pathObject : pathObjects) {
+                    ((PathROIObject) pathObject).setROI(scaleAndTranslatePathObject(pathObject, regionRequest));
+                }
+                return pathObjects;
             } else {
                 logger.warn(String.format("HTTP error: %d\n%s", response.statusCode(), response.body()));
                 return Collections.emptyList();
@@ -103,6 +112,7 @@ public class CellsparseTrainTask extends CellsparseTask {
 
         private String endpointURL;
         private CellsparseModel model;
+        private RegionRequest regionRequest;
 
         private Builder(QuPathViewer viewer) {
             this.viewer = viewer;
@@ -127,6 +137,17 @@ public class CellsparseTrainTask extends CellsparseTask {
          */
         public Builder model(final CellsparseModel model) {
             this.model = model;
+            return this;
+        }
+
+        /**
+         * Specify the region request (required).
+         * 
+         * @param regionRequest
+         * @return this builder
+         */
+        public Builder regionRequest(final RegionRequest regionRequest) {
+            this.regionRequest = regionRequest;
             return this;
         }
 

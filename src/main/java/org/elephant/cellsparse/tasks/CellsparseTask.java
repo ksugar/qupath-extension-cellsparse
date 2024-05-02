@@ -15,10 +15,12 @@ import javafx.concurrent.Task;
 import qupath.lib.gui.dialogs.Dialogs;
 import qupath.lib.images.servers.ImageServer;
 import qupath.lib.objects.PathObject;
+import qupath.lib.regions.RegionRequest;
+import qupath.lib.roi.interfaces.ROI;
 
 public abstract class CellsparseTask extends Task<List<PathObject>> {
 
-    String base64Encode(final BufferedImage bufferedImage) {
+    public static String base64Encode(final BufferedImage bufferedImage) {
         String base64Image = null;
         try {
             final ByteArrayOutputStream baos = new ByteArrayOutputStream();
@@ -26,16 +28,16 @@ public abstract class CellsparseTask extends Task<List<PathObject>> {
             final byte[] bytes = baos.toByteArray();
             base64Image = Base64.getEncoder().encodeToString(bytes);
         } catch (IOException e) {
-            Dialogs.showErrorMessage(getClass().getName(), e);
+            Dialogs.showErrorMessage(CellsparseTask.class.getName(), e);
         }
         return base64Image;
     }
 
     BufferedImage readRegionFromServer(final ImageServer<BufferedImage> imageServer,
-            final double downsample, final int x, final int y, final int width, final int height) {
+            final RegionRequest regionRequest) {
         BufferedImage image = null;
         try {
-            image = imageServer.readRegion(downsample, x, y, width, height);
+            image = imageServer.readRegion(regionRequest);
         } catch (IOException e) {
             Dialogs.showErrorMessage(getClass().getName(), e);
         }
@@ -57,4 +59,11 @@ public abstract class CellsparseTask extends Task<List<PathObject>> {
 
     @Override
     protected abstract List<PathObject> call() throws Exception;
+
+    public static ROI scaleAndTranslatePathObject(final PathObject pathObject, final RegionRequest regionRequest) {
+        final double scale = regionRequest.getDownsample();
+        final double translateX = regionRequest.getX();
+        final double translateY = regionRequest.getY();
+        return pathObject.getROI().scale(scale, scale).translate(translateX, translateY);
+    }
 }

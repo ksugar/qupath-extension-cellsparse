@@ -16,6 +16,10 @@ public class ElephantModel extends
     public ElephantModel() {
     }
 
+    public ElephantModel(final ElephantModelBuilder builder) {
+        super(builder);
+    }
+
     @Override
     public String getName() {
         return "ELEPHANT";
@@ -50,7 +54,7 @@ public class ElephantModel extends
     }
 
     @Override
-    ElephantInferBody.Builder getInferBodyBuilder() {
+    public ElephantInferBody.Builder getInferBodyBuilder() {
         return ElephantInferBody.builder();
     }
 
@@ -67,7 +71,7 @@ public class ElephantModel extends
 
     @Override
     public String getRequestBodyStringInfer(String b64img) {
-        ElephantInferBody body = ((ElephantInferBody.Builder) getDefaultInferBodyBuilder(b64img)).build();
+        ElephantInferBody body = ((ElephantInferBody.Builder) getDefaultInferBodyBuilder().b64img(b64img)).build();
         return GsonTools.getInstance().toJson(body);
     }
 
@@ -75,6 +79,27 @@ public class ElephantModel extends
     public String getRequestBodyStringReset() {
         ElephantResetBody body = ((ElephantResetBody.Builder) getDefaultResetBodyBuilder()).build();
         return GsonTools.getInstance().toJson(body);
+    }
+
+    public static class ElephantModelBuilder
+            extends AbstractCellsparseModelBuilder<ElephantModel, ElephantModelBuilder> {
+
+        public ElephantModelBuilder() {
+        }
+
+        @Override
+        protected ElephantModelBuilder self() {
+            return this;
+        }
+
+        @Override
+        public ElephantModel build() {
+            return new ElephantModel(this);
+        }
+    }
+
+    public static ElephantModelBuilder builder() {
+        return new ElephantModelBuilder();
     }
 
     public static class ElephantTrainBody extends CellsparseTrainBody {

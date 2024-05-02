@@ -19,6 +19,8 @@ import qupath.lib.gui.viewer.QuPathViewer;
 import qupath.lib.images.ImageData;
 import qupath.lib.io.GsonTools;
 import qupath.lib.objects.PathObject;
+import qupath.lib.objects.PathROIObject;
+import qupath.lib.regions.RegionRequest;
 
 public class CellsparseInferTask extends CellsparseTask {
 
@@ -27,6 +29,7 @@ public class CellsparseInferTask extends CellsparseTask {
     private final ImageData<BufferedImage> imageData;
     private final String endpointURL;
     private final CellsparseModel model;
+    private final RegionRequest regionRequest;
 
     public CellsparseInferTask(Builder builder) {
         QuPathViewer viewer = builder.viewer;
@@ -35,12 +38,16 @@ public class CellsparseInferTask extends CellsparseTask {
         this.imageData = viewer.getImageData();
         this.endpointURL = builder.endpointURL;
         this.model = builder.model;
+        if (builder.regionRequest == null) {
+            this.regionRequest = RegionRequest.createInstance(imageData.getServer());
+        } else {
+            this.regionRequest = builder.regionRequest;
+        }
     }
 
     @Override
     protected List<PathObject> call() throws Exception {
-        final BufferedImage image = readRegionFromServer(imageData.getServer(), 1.0, 0, 0,
-                imageData.getServer().getWidth(), imageData.getServer().getHeight());
+        final BufferedImage image = readRegionFromServer(imageData.getServer(), regionRequest);
         final String strImage = base64Encode(image);
 
         final Gson gson = GsonTools.getInstance();
@@ -50,7 +57,11 @@ public class CellsparseInferTask extends CellsparseTask {
         try {
             HttpResponse<String> response = CellsparseInferTask.sendRequest(endpointURL, bodyJson);
             if (response.statusCode() == HttpURLConnection.HTTP_OK) {
-                return gson.fromJson(response.body(), type);
+                List<PathObject> pathObjects = gson.fromJson(response.body(), type);
+                for (PathObject pathObject : pathObjects) {
+                    ((PathROIObject) pathObject).setROI(scaleAndTranslatePathObject(pathObject, regionRequest));
+                }
+                return pathObjects;
             } else {
                 logger.warn(String.format("HTTP error: %d\n%s", response.statusCode(), response.body()));
                 return Collections.emptyList();
@@ -81,6 +92,7 @@ public class CellsparseInferTask extends CellsparseTask {
 
         private String endpointURL;
         private CellsparseModel model;
+        private RegionRequest regionRequest;
 
         private Builder(QuPathViewer viewer) {
             this.viewer = viewer;
@@ -105,6 +117,17 @@ public class CellsparseInferTask extends CellsparseTask {
          */
         public Builder model(final CellsparseModel model) {
             this.model = model;
+            return this;
+        }
+
+        /**
+         * Specify the region request (required).
+         * 
+         * @param regionRequest
+         * @return this builder
+         */
+        public Builder regionRequest(final RegionRequest regionRequest) {
+            this.regionRequest = regionRequest;
             return this;
         }
 

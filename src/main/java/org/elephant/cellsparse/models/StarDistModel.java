@@ -21,6 +21,11 @@ public class StarDistModel extends
     public StarDistModel() {
     }
 
+    public StarDistModel(final StarDistModelBuilder builder) {
+        super(builder);
+        ((IntParameter) getParameter(getParameterList(), PARAM_KEY_N_CHANNELS_IN)).setValue(builder.n_channels_in);
+    }
+
     @Override
     public String getName() {
         return "StarDist";
@@ -57,7 +62,7 @@ public class StarDistModel extends
     }
 
     @Override
-    StarDistInferBody.Builder getInferBodyBuilder() {
+    public StarDistInferBody.Builder getInferBodyBuilder() {
         return StarDistInferBody.builder();
     }
 
@@ -76,7 +81,7 @@ public class StarDistModel extends
 
     @Override
     public String getRequestBodyStringInfer(String b64img) {
-        StarDistInferBody body = ((StarDistInferBody.Builder) getDefaultInferBodyBuilder(b64img))
+        StarDistInferBody body = ((StarDistInferBody.Builder) getDefaultInferBodyBuilder().b64img(b64img))
                 .n_channels_in(((IntParameter) getParameter(getParameterList(), PARAM_KEY_N_CHANNELS_IN)).getValue())
                 .build();
         return GsonTools.getInstance().toJson(body);
@@ -86,6 +91,33 @@ public class StarDistModel extends
     public String getRequestBodyStringReset() {
         StarDistResetBody body = ((StarDistResetBody.Builder) getDefaultResetBodyBuilder()).build();
         return GsonTools.getInstance().toJson(body);
+    }
+
+    public static class StarDistModelBuilder
+            extends AbstractCellsparseModelBuilder<StarDistModel, StarDistModelBuilder> {
+        private int n_channels_in;
+
+        public StarDistModelBuilder() {
+        }
+
+        @Override
+        protected StarDistModelBuilder self() {
+            return this;
+        }
+
+        public StarDistModelBuilder n_channels_in(final int n_channels_in) {
+            this.n_channels_in = n_channels_in;
+            return this;
+        }
+
+        @Override
+        public StarDistModel build() {
+            return new StarDistModel(this);
+        }
+    }
+
+    public static StarDistModelBuilder builder() {
+        return new StarDistModelBuilder();
     }
 
     public static class StarDistTrainBody extends CellsparseTrainBody {

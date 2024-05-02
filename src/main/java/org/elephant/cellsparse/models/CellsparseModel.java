@@ -103,6 +103,8 @@ public abstract class CellsparseModel {
     /**
      * Get request body string for inference.
      * 
+     * @param b64img the base64 encoded image
+     * 
      * @return the body string for inference.
      */
     public abstract String getRequestBodyStringInfer(String b64img);
@@ -117,7 +119,6 @@ public abstract class CellsparseModel {
     /**
      * Run training.
      * 
-     * @return the parameter list for this model
      */
     public abstract void train();
 

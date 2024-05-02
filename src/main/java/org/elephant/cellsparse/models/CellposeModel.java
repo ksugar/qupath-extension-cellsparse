@@ -23,6 +23,12 @@ public class CellposeModel extends
     public CellposeModel() {
     }
 
+    public CellposeModel(final CellposeModelBuilder builder) {
+        super(builder);
+        ((IntParameter) getParameter(getParameterList(), PARAM_KEY_CHAN1)).setValue(builder.chan1);
+        ((IntParameter) getParameter(getParameterList(), PARAM_KEY_CHAN2)).setValue(builder.chan2);
+    }
+
     @Override
     public String getName() {
         return "Cellpose";
@@ -61,7 +67,7 @@ public class CellposeModel extends
     }
 
     @Override
-    CellposeInferBody.Builder getInferBodyBuilder() {
+    public CellposeInferBody.Builder getInferBodyBuilder() {
         return CellposeInferBody.builder();
     }
 
@@ -81,7 +87,7 @@ public class CellposeModel extends
 
     @Override
     public String getRequestBodyStringInfer(String b64img) {
-        CellposeInferBody body = ((CellposeInferBody.Builder) getDefaultInferBodyBuilder(b64img))
+        CellposeInferBody body = ((CellposeInferBody.Builder) getDefaultInferBodyBuilder().b64img(b64img))
                 .chan1(((IntParameter) getParameter(getParameterList(), PARAM_KEY_CHAN1)).getValue())
                 .chan2(((IntParameter) getParameter(getParameterList(), PARAM_KEY_CHAN2)).getValue())
                 .build();
@@ -92,6 +98,39 @@ public class CellposeModel extends
     public String getRequestBodyStringReset() {
         CellposeResetBody body = ((CellposeResetBody.Builder) getDefaultResetBodyBuilder()).build();
         return GsonTools.getInstance().toJson(body);
+    }
+
+    public static class CellposeModelBuilder
+            extends AbstractCellsparseModelBuilder<CellposeModel, CellposeModelBuilder> {
+        private int chan1;
+        private int chan2;
+
+        public CellposeModelBuilder() {
+        }
+
+        @Override
+        protected CellposeModelBuilder self() {
+            return this;
+        }
+
+        public CellposeModelBuilder chan1(final int chan1) {
+            this.chan1 = chan1;
+            return this;
+        }
+
+        public CellposeModelBuilder chan2(final int chan2) {
+            this.chan2 = chan2;
+            return this;
+        }
+
+        @Override
+        public CellposeModel build() {
+            return new CellposeModel(this);
+        }
+    }
+
+    public static CellposeModelBuilder builder() {
+        return new CellposeModelBuilder();
     }
 
     public static class CellposeTrainBody extends CellsparseTrainBody {

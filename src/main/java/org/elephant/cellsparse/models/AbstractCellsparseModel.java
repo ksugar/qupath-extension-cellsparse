@@ -1,11 +1,20 @@
 package org.elephant.cellsparse.models;
 
+import java.net.MalformedURLException;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 
+import org.elephant.cellsparse.tasks.CellsparseInferTask;
+import org.elephant.cellsparse.tasks.CellsparseResetTask;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import javafx.beans.property.Property;
+import javafx.application.Platform;
 import javafx.beans.property.BooleanProperty;
 import javafx.beans.property.DoubleProperty;
 import javafx.beans.property.IntegerProperty;
@@ -13,6 +22,9 @@ import javafx.beans.property.StringProperty;
 import javafx.scene.Node;
 import qupath.lib.gui.dialogs.ParameterPanelFX;
 import qupath.lib.gui.prefs.PathPrefs;
+import qupath.lib.gui.viewer.QuPathViewer;
+import qupath.lib.objects.PathObject;
+import qupath.lib.objects.hierarchy.PathObjectHierarchy;
 import qupath.lib.plugins.parameters.BooleanParameter;
 import qupath.lib.plugins.parameters.ChoiceParameter;
 import qupath.lib.plugins.parameters.DoubleParameter;
@@ -22,11 +34,15 @@ import qupath.lib.plugins.parameters.Parameter;
 import qupath.lib.plugins.parameters.ParameterChangeListener;
 import qupath.lib.plugins.parameters.ParameterList;
 import qupath.lib.plugins.parameters.StringParameter;
+import qupath.lib.regions.RegionRequest;
 
 public abstract class AbstractCellsparseModel<T extends AbstractCellsparseModel.CellsparseTrainBody.Builder, U extends AbstractCellsparseModel.CellsparseInferBody.Builder, V extends AbstractCellsparseModel.CellsparseResetBody.Builder>
         extends CellsparseModel
         implements ParameterChangeListener {
 
+    private static final Logger logger = LoggerFactory.getLogger(AbstractCellsparseModel.class);
+
+    private static final String PARAM_KEY_MODELNAME = "modelname";
     private static final String PARAM_KEY_EPOCHS = "epochs";
     private static final String PARAM_KEY_TRAINPATCH = "trainpatch";
     private static final String PARAM_KEY_BATCHSIZE = "batchsize";
@@ -36,6 +52,7 @@ public abstract class AbstractCellsparseModel<T extends AbstractCellsparseModel.
     private static final String PARAM_KEY_SIMPLIFY_TOL = "simplify_tol";
     private static final String PARAM_KEY_PRETRAINED = "pretrained";
 
+    private static final String DEFAULT_MODEL_NAME = "default";
     private static final int DEFAULT_NUM_EPOCHS = 1;
     private static final int DEFAULT_TRAIN_PATCH = 224;
     private static final int DEFAULT_BATCH_SIZE = 8;
@@ -55,8 +72,25 @@ public abstract class AbstractCellsparseModel<T extends AbstractCellsparseModel.
 
     private transient Map<String, Property<?>> propertyMap = new HashMap<>();
 
+    public AbstractCellsparseModel() {
+    }
+
+    public AbstractCellsparseModel(final AbstractCellsparseModelBuilder<?, ?> builder) {
+        ((StringParameter) getParameter(getParameterList(), PARAM_KEY_MODELNAME)).setValue(builder.modelname);
+        ((IntParameter) getParameter(getParameterList(), PARAM_KEY_EPOCHS)).setValue(builder.epochs);
+        ((IntParameter) getParameter(getParameterList(), PARAM_KEY_TRAINPATCH)).setValue(builder.trainpatch);
+        ((IntParameter) getParameter(getParameterList(), PARAM_KEY_BATCHSIZE)).setValue(builder.batchsize);
+        ((IntParameter) getParameter(getParameterList(), PARAM_KEY_STEPS)).setValue(builder.steps);
+        ((DoubleParameter) getParameter(getParameterList(), PARAM_KEY_LR)).setValue(builder.lr);
+        ((DoubleParameter) getParameter(getParameterList(), PARAM_KEY_MINAREA)).setValue(builder.minarea);
+        ((DoubleParameter) getParameter(getParameterList(), PARAM_KEY_SIMPLIFY_TOL)).setValue(builder.simplify_tol);
+        ((ChoiceParameter<?>) getParameter(getParameterListReset(), PARAM_KEY_PRETRAINED)).setStringLastValue(null,
+                builder.pretrained);
+    }
+
     ParameterList createParameterList() {
         ParameterList params = new ParameterList()
+                .addStringParameter(PARAM_KEY_MODELNAME, "Model name", DEFAULT_MODEL_NAME)
                 .addIntParameter(PARAM_KEY_TRAINPATCH, "Patch size", DEFAULT_TRAIN_PATCH, null,
                         "Patch size for training")
                 .addIntParameter(PARAM_KEY_BATCHSIZE, "Batch size", DEFAULT_BATCH_SIZE, null,
@@ -168,15 +202,86 @@ public abstract class AbstractCellsparseModel<T extends AbstractCellsparseModel.
     }
 
     @Override
+    public boolean isTrained() {
+        // TODO Auto-generated method stub
+        throw new UnsupportedOperationException("Unimplemented method 'isTrained'");
+    }
+
+    @Override
     public void train() {
         // TODO Auto-generated method stub
         throw new UnsupportedOperationException("Unimplemented method 'train'");
     }
 
-    @Override
-    public boolean isTrained() {
-        // TODO Auto-generated method stub
-        throw new UnsupportedOperationException("Unimplemented method 'isTrained'");
+    public void infer(final QuPathViewer viewer, final String serverURL, final RegionRequest regionRequest)
+            throws URISyntaxException, MalformedURLException {
+        String url = null;
+        try {
+            url = new URI(serverURL)
+                    .resolve(getEndpoint())
+                    .normalize()
+                    .toURL()
+                    .toString();
+        } catch (URISyntaxException | MalformedURLException e) {
+            logger.warn("{} is not a valid URL.", serverURL);
+            throw e;
+        }
+        if (!url.endsWith("/")) {
+            url += "/";
+        }
+        CellsparseInferTask task = CellsparseInferTask.builder(viewer)
+                .endpointURL(url)
+                .model(this)
+                .regionRequest(regionRequest)
+                .build();
+        task.setOnSucceeded(event -> {
+            List<PathObject> detected = task.getValue();
+            if (detected != null && !task.getValue().isEmpty()) {
+                if (!detected.isEmpty()) {
+                    Platform.runLater(() -> {
+                        PathObjectHierarchy hierarchy = viewer.getImageData().getHierarchy();
+                        List<PathObject> toRomove = hierarchy.getAnnotationObjects().stream()
+                                .filter(pathObject -> pathObject.getPathClass() == null).toList();
+                        hierarchy.removeObjects(toRomove, false);
+                        hierarchy.addObjects(detected);
+                        hierarchy.getSelectionModel().setSelectedObjects(detected, detected.get(0));
+                    });
+                } else {
+                    logger.warn("No objects detected");
+                }
+            }
+        });
+        Platform.runLater(task);
+    }
+
+    public void infer(final QuPathViewer viewer, final String serverURL)
+            throws URISyntaxException, MalformedURLException {
+        infer(viewer, serverURL, null);
+    }
+
+    public void reset(final String serverURL) throws URISyntaxException, MalformedURLException {
+        String url = null;
+        try {
+            url = new URI(serverURL)
+                    .resolve(getEndpoint() + "/reset")
+                    .normalize()
+                    .toURL()
+                    .toString();
+        } catch (URISyntaxException | MalformedURLException e) {
+            logger.warn("{} is not a valid URL.", serverURL);
+            throw e;
+        }
+        if (!url.endsWith("/")) {
+            url += "/";
+        }
+        CellsparseResetTask task = CellsparseResetTask.builder()
+                .endpointURL(url.toString())
+                .model(this)
+                .build();
+        task.setOnSucceeded(event -> {
+            logger.info("Model is reset.");
+        });
+        Platform.runLater(task);
     }
 
     private <S> void registerParameter(String key, Parameter<S> param) {
@@ -217,7 +322,7 @@ public abstract class AbstractCellsparseModel<T extends AbstractCellsparseModel.
 
     CellsparseTrainBody.Builder getDefaultTrainBodyBuilder(String b64img, String b64lbl) {
         return getTrainBodyBuilder()
-                .modelname("default")
+                .modelname(((StringParameter) getParameter(getParameterList(), PARAM_KEY_MODELNAME)).getValue())
                 .b64img(b64img)
                 .b64lbl(b64lbl)
                 .train(true)
@@ -232,10 +337,9 @@ public abstract class AbstractCellsparseModel<T extends AbstractCellsparseModel.
                         ((DoubleParameter) getParameter(getParameterList(), PARAM_KEY_SIMPLIFY_TOL)).getValue());
     }
 
-    CellsparseInferBody.Builder getDefaultInferBodyBuilder(String b64img) {
+    CellsparseInferBody.Builder getDefaultInferBodyBuilder() {
         return getInferBodyBuilder()
-                .modelname("default")
-                .b64img(b64img)
+                .modelname(((StringParameter) getParameter(getParameterList(), PARAM_KEY_MODELNAME)).getValue())
                 .eval(true)
                 .minarea(((DoubleParameter) getParameter(getParameterList(), PARAM_KEY_MINAREA)).getValue())
                 .simplify_tol(
@@ -244,9 +348,73 @@ public abstract class AbstractCellsparseModel<T extends AbstractCellsparseModel.
 
     CellsparseResetBody.Builder getDefaultResetBodyBuilder() {
         return getResetBodyBuilder()
-                .modelname("default")
+                .modelname(((StringParameter) getParameter(getParameterList(), PARAM_KEY_MODELNAME)).getValue())
                 .pretrained(((ChoiceParameter<?>) getParameter(getParameterListReset(), PARAM_KEY_PRETRAINED))
                         .getValue().toString());
+    }
+
+    public abstract static class AbstractCellsparseModelBuilder<S extends AbstractCellsparseModel<?, ?, ?>, R extends AbstractCellsparseModelBuilder<S, R>> {
+        private String modelname;
+        private int trainpatch = 224;
+        private int batchsize = 8;
+        private int epochs = 10;
+        private int steps = 10;
+        private double lr = 0.001;
+        private double minarea = 10.0;
+        private double simplify_tol = 0;
+        private String pretrained = "random";
+
+        public AbstractCellsparseModelBuilder() {
+        }
+
+        protected abstract R self();
+
+        public R modelname(final String modelname) {
+            this.modelname = modelname;
+            return self();
+        }
+
+        public R trainpatch(final int trainpatch) {
+            this.trainpatch = trainpatch;
+            return self();
+        }
+
+        public R batchsize(final int batchsize) {
+            this.batchsize = batchsize;
+            return self();
+        }
+
+        public R epochs(final int epochs) {
+            this.epochs = epochs;
+            return self();
+        }
+
+        public R steps(final int steps) {
+            this.steps = steps;
+            return self();
+        }
+
+        public R lr(final double lr) {
+            this.lr = lr;
+            return self();
+        }
+
+        public R minarea(final double minarea) {
+            this.minarea = minarea;
+            return self();
+        }
+
+        public R simplify_tol(final double simplify_tol) {
+            this.simplify_tol = simplify_tol;
+            return self();
+        }
+
+        public R pretrained(final String pretrained) {
+            this.pretrained = pretrained;
+            return self();
+        }
+
+        public abstract S build();
     }
 
     public static class CellsparseTrainBody {
