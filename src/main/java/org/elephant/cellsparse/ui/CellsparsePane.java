@@ -51,6 +51,7 @@ import qupath.lib.common.GeneralTools;
 import qupath.lib.gui.QuPathGUI;
 import qupath.lib.gui.dialogs.Dialogs;
 import qupath.lib.gui.tools.PaneTools;
+import qupath.lib.gui.viewer.RegionFilter;
 import qupath.lib.images.ImageData;
 import qupath.lib.images.servers.ImageServer;
 import qupath.lib.images.servers.PixelCalibration;
@@ -68,6 +69,7 @@ public class CellsparsePane extends GridPane {
     private ObservableList<CellsparseResolution> resolutions = FXCollections.observableArrayList();
     private ComboBox<CellsparseResolution> comboResolutions = new ComboBox<>(resolutions);
     private ReadOnlyObjectProperty<CellsparseResolution> selectedResolution;
+    private ReadOnlyObjectProperty<RegionFilter> selectedRegionFilter;
 
     private ChangeListener<ImageData<BufferedImage>> imageDataListener = new ChangeListener<ImageData<BufferedImage>>() {
 
@@ -310,6 +312,7 @@ public class CellsparsePane extends GridPane {
     private void addRegion(int row) {
         var labelRegion = new Label("Region");
         var comboRegionFilter = PixelClassifierUI.createRegionFilterCombo(qupath.getOverlayOptions());
+        comboRegionFilter.getSelectionModel().selectedItemProperty();
 
         add(labelRegion, 0, row);
         add(comboRegionFilter, 1, row, GridPane.REMAINING, 1);
@@ -510,9 +513,12 @@ public class CellsparsePane extends GridPane {
         if (!url.endsWith("/")) {
             url += "/";
         }
+        final double downsample = selectedResolution.get().getPixelCalibration().getAveragedPixelSize().doubleValue();
+        selectedRegionFilter.get().
         CellsparseInferTask task = CellsparseInferTask.builder(qupath.getViewer())
                 .endpointURL(url.toString())
                 .model(model)
+                .regionRequest(null)
                 .build();
         task.setOnSucceeded(event -> {
             List<PathObject> detected = task.getValue();

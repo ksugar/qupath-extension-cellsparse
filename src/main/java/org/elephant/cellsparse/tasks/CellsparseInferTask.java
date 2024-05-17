@@ -8,6 +8,7 @@ import java.net.http.HttpResponse;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
+import java.util.function.Function;
 
 import org.elephant.cellsparse.models.CellsparseModel;
 import org.slf4j.Logger;
@@ -19,8 +20,10 @@ import qupath.lib.gui.viewer.QuPathViewer;
 import qupath.lib.images.ImageData;
 import qupath.lib.io.GsonTools;
 import qupath.lib.objects.PathObject;
+import qupath.lib.objects.PathObjects;
 import qupath.lib.objects.PathROIObject;
 import qupath.lib.regions.RegionRequest;
+import qupath.lib.roi.interfaces.ROI;
 
 public class CellsparseInferTask extends CellsparseTask {
 
@@ -30,6 +33,7 @@ public class CellsparseInferTask extends CellsparseTask {
     private final String endpointURL;
     private final CellsparseModel model;
     private final RegionRequest regionRequest;
+    private final Function<ROI, PathObject> creatorFun;
 
     public CellsparseInferTask(Builder builder) {
         QuPathViewer viewer = builder.viewer;
@@ -43,6 +47,7 @@ public class CellsparseInferTask extends CellsparseTask {
         } else {
             this.regionRequest = builder.regionRequest;
         }
+        this.creatorFun = builder.creatorFun;
     }
 
     @Override
@@ -93,6 +98,7 @@ public class CellsparseInferTask extends CellsparseTask {
         private String endpointURL;
         private CellsparseModel model;
         private RegionRequest regionRequest;
+        private Function<ROI, PathObject> creatorFun;
 
         private Builder(QuPathViewer viewer) {
             this.viewer = viewer;
@@ -128,6 +134,18 @@ public class CellsparseInferTask extends CellsparseTask {
          */
         public Builder regionRequest(final RegionRequest regionRequest) {
             this.regionRequest = regionRequest;
+            return this;
+        }
+
+        /**
+         * Create annotations rather than detections (the default).
+         * If cell expansion is not zero, the nucleus will be included as a child
+         * object.
+         * 
+         * @return this builder
+         */
+        public Builder createAnnotations() {
+            this.creatorFun = r -> PathObjects.createAnnotationObject(r);
             return this;
         }
 
