@@ -16,6 +16,7 @@ import java.net.MalformedURLException;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
@@ -48,6 +49,7 @@ import javafx.scene.layout.GridPane;
 import javafx.scene.layout.Priority;
 import javafx.scene.text.TextAlignment;
 import qupath.lib.common.GeneralTools;
+import qupath.lib.geom.Point2;
 import qupath.lib.gui.QuPathGUI;
 import qupath.lib.gui.dialogs.Dialogs;
 import qupath.lib.gui.tools.PaneTools;
@@ -55,8 +57,10 @@ import qupath.lib.gui.viewer.RegionFilter;
 import qupath.lib.images.ImageData;
 import qupath.lib.images.servers.ImageServer;
 import qupath.lib.images.servers.PixelCalibration;
+import qupath.lib.images.servers.TileRequest;
 import qupath.lib.objects.PathObject;
 import qupath.lib.objects.hierarchy.PathObjectHierarchy;
+import qupath.lib.regions.RegionRequest;
 import qupath.process.gui.commands.ml.PixelClassifierUI;
 
 public class CellsparsePane extends GridPane {
@@ -85,7 +89,7 @@ public class CellsparsePane extends GridPane {
      * Create a new main pane for the Cellsparse command.
      * 
      * @param command
-     *                The Cellsparse command.
+     *            The Cellsparse command.
      */
     public CellsparsePane(CellsparseCommand command, final QuPathGUI qupath) {
         super();
@@ -312,7 +316,7 @@ public class CellsparsePane extends GridPane {
     private void addRegion(int row) {
         var labelRegion = new Label("Region");
         var comboRegionFilter = PixelClassifierUI.createRegionFilterCombo(qupath.getOverlayOptions());
-        comboRegionFilter.getSelectionModel().selectedItemProperty();
+        selectedRegionFilter = comboRegionFilter.getSelectionModel().selectedItemProperty();
 
         add(labelRegion, 0, row);
         add(comboRegionFilter, 1, row, GridPane.REMAINING, 1);
@@ -514,30 +518,52 @@ public class CellsparsePane extends GridPane {
             url += "/";
         }
         final double downsample = selectedResolution.get().getPixelCalibration().getAveragedPixelSize().doubleValue();
-        selectedRegionFilter.get().
-        CellsparseInferTask task = CellsparseInferTask.builder(qupath.getViewer())
-                .endpointURL(url.toString())
-                .model(model)
-                .regionRequest(null)
-                .build();
-        task.setOnSucceeded(event -> {
-            List<PathObject> detected = task.getValue();
-            if (detected != null && !task.getValue().isEmpty()) {
-                if (!detected.isEmpty()) {
-                    Platform.runLater(() -> {
-                        PathObjectHierarchy hierarchy = qupath.getViewer().getImageData().getHierarchy();
-                        List<PathObject> toRomove = hierarchy.getAnnotationObjects().stream()
-                                .filter(pathObject -> pathObject.getPathClass() == null).toList();
-                        hierarchy.removeObjects(toRomove, false);
-                        hierarchy.addObjects(detected);
-                        hierarchy.getSelectionModel().setSelectedObjects(detected, detected.get(0));
-                    });
-                } else {
-                    logger.warn("No objects detected");
+        final RegionRequest regionRequest = RegionRequest.createInstance(qupath.getViewer().getServer(), downsample);
+        Collection<TileRequest> tiles = qupath.getViewer().getServer().getTileRequestManager()
+                .getTileRequests(regionRequest);
+        if (regionRequest != null) {
+            double x = (Math.max(0, regionRequest.getMinX())
+                    + Math.min(qupath.getViewer().getServer().getWidth(), regionRequest.getMaxX())) / 2.0;
+            double y = (Math.max(0, regionRequest.getMinY())
+                    + Math.min(qupath.getViewer().getServer().getHeight(), regionRequest.getMaxY())) / 2.0;
+            var p = new Point2(x, y);
+            tiles = new ArrayList<>(tiles);
+            ((List<TileRequest>) tiles).sort(
+                    Comparator.comparingDouble((TileRequest t) -> p.distanceSq(t.getImageX() + t.getImageWidth() / 2.0,
+                            t.getImageY() + t.getImageHeight() / 2.0)));
+        }
+        final RegionFilter regionFilter = selectedRegionFilter.get();
+        for (TileRequest tile : tiles) {
+
+            var request = tile.getRegionRequest();
+
+            if (regionFilter != null && !regionFilter.test(qupath.getImageData(), request))
+                continue;
+
+            CellsparseInferTask task = CellsparseInferTask.builder(qupath.getViewer())
+                    .endpointURL(url.toString())
+                    .model(model)
+                    .regionRequest(request)
+                    .build();
+            task.setOnSucceeded(event -> {
+                List<PathObject> detected = task.getValue();
+                if (detected != null && !task.getValue().isEmpty()) {
+                    if (!detected.isEmpty()) {
+                        Platform.runLater(() -> {
+                            PathObjectHierarchy hierarchy = qupath.getViewer().getImageData().getHierarchy();
+                            List<PathObject> toRomove = hierarchy.getAnnotationObjects().stream()
+                                    .filter(pathObject -> pathObject.getPathClass() == null).toList();
+                            hierarchy.removeObjects(toRomove, false);
+                            hierarchy.addObjects(detected);
+                            hierarchy.getSelectionModel().setSelectedObjects(detected, detected.get(0));
+                        });
+                    } else {
+                        logger.warn("No objects detected");
+                    }
                 }
-            }
-        });
-        submitTask(task);
+            });
+            submitTask(task);
+        }
     }
 
     /**
