@@ -1,6 +1,7 @@
 package org.elephant.cellsparse.ui;
 
 import org.elephant.cellsparse.CellsparseCommand;
+import org.elephant.cellsparse.lib.gui.viewer.SelectedObjectsRegionFilter;
 import org.elephant.cellsparse.models.CellposeModel;
 import org.elephant.cellsparse.models.CellsparseModel;
 import org.elephant.cellsparse.models.ElephantModel;
@@ -20,10 +21,16 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Collectors;
 
 import javafx.application.Platform;
 import javafx.beans.binding.Bindings;
 import javafx.beans.property.ReadOnlyObjectProperty;
+import javafx.beans.property.SimpleBooleanProperty;
 import javafx.beans.value.ChangeListener;
 import javafx.beans.value.ObservableValue;
 import javafx.collections.FXCollections;
@@ -34,6 +41,7 @@ import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Node;
 import javafx.scene.control.Button;
+import javafx.scene.control.CheckBox;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.Control;
 import javafx.scene.control.Label;
@@ -53,7 +61,9 @@ import qupath.lib.geom.Point2;
 import qupath.lib.gui.QuPathGUI;
 import qupath.lib.gui.dialogs.Dialogs;
 import qupath.lib.gui.tools.PaneTools;
+import qupath.lib.gui.viewer.OverlayOptions;
 import qupath.lib.gui.viewer.RegionFilter;
+import qupath.lib.gui.viewer.RegionFilter.StandardRegionFilters;
 import qupath.lib.images.ImageData;
 import qupath.lib.images.servers.ImageServer;
 import qupath.lib.images.servers.PixelCalibration;
@@ -61,6 +71,8 @@ import qupath.lib.images.servers.TileRequest;
 import qupath.lib.objects.PathObject;
 import qupath.lib.objects.hierarchy.PathObjectHierarchy;
 import qupath.lib.regions.RegionRequest;
+import qupath.lib.roi.RoiTools;
+import qupath.lib.roi.interfaces.ROI;
 import qupath.process.gui.commands.ml.PixelClassifierUI;
 
 public class CellsparsePane extends GridPane {
@@ -74,6 +86,7 @@ public class CellsparsePane extends GridPane {
     private ComboBox<CellsparseResolution> comboResolutions = new ComboBox<>(resolutions);
     private ReadOnlyObjectProperty<CellsparseResolution> selectedResolution;
     private ReadOnlyObjectProperty<RegionFilter> selectedRegionFilter;
+    private SimpleBooleanProperty keepExistingProperty = new SimpleBooleanProperty(true);
 
     private ChangeListener<ImageData<BufferedImage>> imageDataListener = new ChangeListener<ImageData<BufferedImage>>() {
 
@@ -109,6 +122,8 @@ public class CellsparsePane extends GridPane {
         addRegion(row++);
 
         addSeparator(row++);
+
+        addCheckboxes(row++);
 
         addIOButtons(row++);
         addCommandButtons(row++);
@@ -315,11 +330,34 @@ public class CellsparsePane extends GridPane {
 
     private void addRegion(int row) {
         var labelRegion = new Label("Region");
-        var comboRegionFilter = PixelClassifierUI.createRegionFilterCombo(qupath.getOverlayOptions());
+        var comboRegionFilter = createRegionFilterCombo();
         selectedRegionFilter = comboRegionFilter.getSelectionModel().selectedItemProperty();
 
         add(labelRegion, 0, row);
         add(comboRegionFilter, 1, row, GridPane.REMAINING, 1);
+    }
+
+    /**
+     * Create a {@link ComboBox} that can be used to select the region filter for selected objects.
+     * 
+     * @param options
+     * @return
+     */
+    private static ComboBox<RegionFilter> createRegionFilterCombo() {
+        var comboRegion = new ComboBox<RegionFilter>();
+        comboRegion.getItems().addAll(SelectedObjectsRegionFilter.values());
+        comboRegion.getSelectionModel().select(SelectedObjectsRegionFilter.EVERYWHERE);
+        comboRegion.setMaxWidth(Double.MAX_VALUE);
+        comboRegion.setTooltip(new Tooltip("Control where the detection is applied.\n"
+                + "Warning! Runnning detection for the entire image at high resolution can be very slow and require a lot of memory."));
+        return comboRegion;
+    }
+
+    private void addCheckboxes(int row) {
+        var keepExisting = new CheckBox("Keep existing annotations");
+        keepExisting.setTooltip(new Tooltip("Keep existing annotations when running inference"));
+        keepExisting.selectedProperty().bindBidirectional(keepExistingProperty);
+        add(keepExisting, 0, row);
     }
 
     private void addIOButtons(int row) {
@@ -431,16 +469,16 @@ public class CellsparsePane extends GridPane {
         }
     }
 
-    private void submitTask(Task<?> task) {
+    private Future<?> submitTask(Task<?> task) {
         task.setOnFailed(event -> {
             Platform.runLater(() -> {
                 Dialogs.showErrorMessage("Connection failed",
                         "Please check that the samapi server (v0.4 and above) is running and the URL is correct.");
             });
         });
-        command.getPool().submit(task);
         command.getCurrentTasks().add(task);
         task.stateProperty().addListener((observable, oldValue, newValue) -> taskStateChange(task, newValue));
+        return command.getPool().submit(task);
     }
 
     /**
@@ -533,12 +571,27 @@ public class CellsparsePane extends GridPane {
                             t.getImageY() + t.getImageHeight() / 2.0)));
         }
         final RegionFilter regionFilter = selectedRegionFilter.get();
+        final PathObjectHierarchy hierarchy = qupath.getViewer().getImageData().getHierarchy();
+        final Collection<PathObject> selectedAnnotations = hierarchy.getSelectionModel().getSelectedObjects();
+        final List<PathObject> toRomove = hierarchy.getAnnotationObjects().stream()
+                .filter(pathObject -> pathObject.getPathClass() == null).toList();
+        final ROI union = RoiTools
+                .union(selectedAnnotations.stream().map(it -> it.getROI()).collect(Collectors.toList()));
+        final AtomicInteger tileCount = new AtomicInteger();
+        final List<PathObject> detections = Collections.synchronizedList(new ArrayList<>());
+        final int totalTiles = tiles.size();
+        List<Future<?>> futures = new ArrayList<>();
         for (TileRequest tile : tiles) {
 
             var request = tile.getRegionRequest();
 
-            if (regionFilter != null && !regionFilter.test(qupath.getImageData(), request))
+            if (regionFilter != null && !regionFilter.test(qupath.getImageData(), request)) {
+                if (tileCount.incrementAndGet() == totalTiles) {
+                    finalize(hierarchy, toRomove, detections, union, (SelectedObjectsRegionFilter) regionFilter,
+                            selectedAnnotations);
+                }
                 continue;
+            }
 
             CellsparseInferTask task = CellsparseInferTask.builder(qupath.getViewer())
                     .endpointURL(url.toString())
@@ -546,24 +599,57 @@ public class CellsparsePane extends GridPane {
                     .regionRequest(request)
                     .build();
             task.setOnSucceeded(event -> {
-                List<PathObject> detected = task.getValue();
+                final List<PathObject> detected = task.getValue();
                 if (detected != null && !task.getValue().isEmpty()) {
                     if (!detected.isEmpty()) {
-                        Platform.runLater(() -> {
-                            PathObjectHierarchy hierarchy = qupath.getViewer().getImageData().getHierarchy();
-                            List<PathObject> toRomove = hierarchy.getAnnotationObjects().stream()
-                                    .filter(pathObject -> pathObject.getPathClass() == null).toList();
-                            hierarchy.removeObjects(toRomove, false);
-                            hierarchy.addObjects(detected);
-                            hierarchy.getSelectionModel().setSelectedObjects(detected, detected.get(0));
-                        });
+                        detections.addAll(detected);
                     } else {
                         logger.warn("No objects detected");
                     }
                 }
+                if (tileCount.incrementAndGet() == totalTiles) {
+                    finalize(hierarchy, toRomove, detections, union, (SelectedObjectsRegionFilter) regionFilter,
+                            selectedAnnotations);
+                }
             });
-            submitTask(task);
+            futures.add(submitTask(task));
         }
+        for (Future<?> future : futures) {
+            try {
+                future.get();
+            } catch (CancellationException e) {
+                logger.warn("Task is cancelled", e);
+            } catch (ExecutionException e) {
+                logger.warn("Error while waiting for task to complete", e);
+            } catch (InterruptedException e) {
+                logger.warn("Task is interrupted", e);
+            }
+        }
+    }
+
+    private void finalize(PathObjectHierarchy hierarchy, List<PathObject> toRomove, List<PathObject> detections,
+            ROI union, SelectedObjectsRegionFilter regionFilter, Collection<PathObject> selectedAnnotations) {
+        Platform.runLater(() -> {
+            if (!keepExistingProperty.get()) {
+                hierarchy.removeObjects(toRomove, false);
+            }
+            hierarchy.addObjects(detections);
+            if (regionFilter == SelectedObjectsRegionFilter.SELECTED_OBJECTS) {
+                hierarchy.removeObjects(selectedAnnotations, false);
+                Collection<PathObject> toKeep = hierarchy.getObjectsForROI(null, union);
+                hierarchy.removeObjects(detections.stream()
+                        .filter(pathObject -> !toKeep.contains(pathObject))
+                        .collect(Collectors.toList()),
+                        false);
+                if (!toKeep.isEmpty()) {
+                    hierarchy.getSelectionModel().setSelectedObjects(toKeep, toKeep.iterator().next());
+                }
+            } else {
+                if (!detections.isEmpty()) {
+                    hierarchy.getSelectionModel().setSelectedObjects(detections, detections.get(0));
+                }
+            }
+        });
     }
 
     /**
