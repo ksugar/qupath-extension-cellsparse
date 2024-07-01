@@ -24,13 +24,11 @@ import java.net.MalformedURLException;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.function.Function;
 import java.util.stream.IntStream;
 import java.util.List;
 import java.util.Map;
@@ -69,9 +67,9 @@ import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.ColumnConstraints;
 import javafx.scene.layout.GridPane;
 import javafx.scene.layout.Priority;
+import javafx.scene.layout.StackPane;
 import javafx.scene.text.TextAlignment;
 import qupath.lib.common.GeneralTools;
-import qupath.lib.geom.Point2;
 import qupath.lib.gui.QuPathGUI;
 import qupath.lib.gui.dialogs.Dialogs;
 import qupath.lib.gui.tools.PaneTools;
@@ -82,8 +80,6 @@ import qupath.lib.images.servers.ColorTransforms;
 import qupath.lib.images.servers.ImageServer;
 import qupath.lib.images.servers.PixelCalibration;
 import qupath.lib.images.servers.TileRequest;
-import qupath.lib.objects.CellTools;
-import qupath.lib.objects.PathCellObject;
 import qupath.lib.objects.PathObject;
 import qupath.lib.objects.PathObjects;
 import qupath.lib.objects.hierarchy.PathObjectHierarchy;
@@ -397,13 +393,20 @@ public class CellsparsePane extends GridPane {
     }
 
     private void addNumbers(int row) {
+        var tileWidthLabel = new Label("Tile width");
+        StackPane tileWidthLabelContainer = new StackPane(tileWidthLabel);
+        tileWidthLabelContainer.setAlignment(Pos.CENTER);
         var tileWidthSpinner = CellsparseUIUtils.createIntegerSpinner(0, Integer.MAX_VALUE, tileWidthProperty, 1,
-                "Tile width");
-        tileWidthSpinner.setTooltip(new Tooltip("Width of a tile used for detection"));
+                "Width of a tile used for detection");
+        var tileHeightLabel = new Label("Tile height");
+        StackPane tileHeightLabelContainer = new StackPane(tileHeightLabel);
+        tileHeightLabelContainer.setAlignment(Pos.CENTER);
         var tileHeightSpinner = CellsparseUIUtils.createIntegerSpinner(0, Integer.MAX_VALUE, tileHeightProperty, 1,
-                "Tile height");
-        tileHeightSpinner.setTooltip(new Tooltip("Height of a tile used for detection"));
-        var paneSpinners = PaneTools.createColumnGridControls(tileWidthSpinner, tileHeightSpinner);
+                "Height of a tile used for detection");
+        var paneSpinners = PaneTools.createColumnGridControls(
+                tileWidthLabelContainer, tileWidthSpinner,
+                tileHeightLabelContainer, tileHeightSpinner);
+        paneSpinners.setHgap(10);
         add(paneSpinners, 0, row, GridPane.REMAINING, 1);
     }
 
@@ -516,6 +519,12 @@ public class CellsparsePane extends GridPane {
         }
     }
 
+    /**
+     * Submit a task.
+     * 
+     * @param task the task to submit
+     * @return a Future representing pending completion of the task
+     */
     private Future<?> submitTask(Task<?> task) {
         task.setOnFailed(event -> {
             Platform.runLater(() -> {
@@ -622,6 +631,8 @@ public class CellsparsePane extends GridPane {
         final ROI union = regionFilter == SelectedObjectsRegionFilter.EVERYWHERE || selectedAnnotations.isEmpty()
                 ? null
                 : RoiTools.union(selectedAnnotations.stream().map(it -> it.getROI()).collect(Collectors.toList()));
+
+        // Get the RegionRequest with the downsample (and union)
         RegionRequest regionRequest;
         if (union == null) {
             regionRequest = RegionRequest.createInstance(opServer, downsample);
@@ -641,7 +652,6 @@ public class CellsparsePane extends GridPane {
         final List<PathObject> detections = Collections.synchronizedList(new ArrayList<>());
         List<Future<?>> futures = new ArrayList<>();
         for (TileRequest tile : tiles) {
-
             var request = tile.getRegionRequest();
             var server = qupath.getViewer().getServer();
             int x1 = (int) Math.max(0, Math.round(request.getX() - downsample * pad));
@@ -688,6 +698,16 @@ public class CellsparsePane extends GridPane {
                 selectedAnnotations);
     }
 
+    /**
+     * Finalize the detection results.
+     * 
+     * @param hierarchy
+     * @param toRomove
+     * @param detections
+     * @param union
+     * @param regionFilter
+     * @param selectedAnnotations
+     */
     private void finalize(PathObjectHierarchy hierarchy, List<PathObject> toRomove, List<PathObject> detections,
             ROI union, SelectedObjectsRegionFilter regionFilter, Collection<PathObject> selectedAnnotations) {
         Platform.runLater(() -> {
@@ -762,35 +782,10 @@ public class CellsparsePane extends GridPane {
         submitTask(task);
     }
 
-    private static PathObject objectToCell(PathObject pathObject) {
-        ROI roiNucleus = null;
-        var children = pathObject.getChildObjects();
-        if (children.size() == 1)
-            roiNucleus = children.iterator().next().getROI();
-        else if (children.size() > 1)
-            throw new IllegalArgumentException("Cannot convert object with multiple child objects to a cell!");
-        return PathObjects.createCellObject(pathObject.getROI(), roiNucleus, pathObject.getPathClass(),
-                pathObject.getMeasurementList());
-    }
-
-    private static PathObject cellToObject(PathObject cell, Function<ROI, PathObject> creator) {
-        var parent = creator.apply(cell.getROI());
-        var nucleusROI = cell instanceof PathCellObject ? ((PathCellObject) cell).getNucleusROI() : null;
-        if (nucleusROI != null) {
-            var nucleus = creator.apply(nucleusROI);
-            nucleus.setPathClass(cell.getPathClass());
-            parent.addChildObject(nucleus);
-        }
-        parent.setPathClass(cell.getPathClass());
-        var cellMeasurements = cell.getMeasurementList();
-        if (!cellMeasurements.isEmpty()) {
-            try (var ml = parent.getMeasurementList()) {
-                ml.putAll(cellMeasurements);
-            }
-        }
-        return parent;
-    }
-
+    /**
+     * Original cocde from qupath-extension-stardist:
+     * https://github.com/qupath/qupath-extension-stardist/blob/c9424b488a356a3af26ef7bc58eb9bce2592a108/src/main/java/qupath/ext/stardist/StarDist2D.java#L1573
+     */
     private static class PotentialNucleus {
 
         private Geometry geometry;
@@ -815,6 +810,10 @@ public class CellsparsePane extends GridPane {
 
     }
 
+    /**
+     * Original cocde from qupath-extension-stardist:
+     * https://github.com/qupath/qupath-extension-stardist/blob/c9424b488a356a3af26ef7bc58eb9bce2592a108/src/main/java/qupath/ext/stardist/StarDist2D.java#L1573
+     */
     private static List<PotentialNucleus> filterNuclei(List<PotentialNucleus> potentialNuclei) {
 
         // Sort in descending order of probability
