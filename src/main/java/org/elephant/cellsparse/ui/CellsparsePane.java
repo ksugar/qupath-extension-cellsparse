@@ -9,6 +9,13 @@ import org.elephant.cellsparse.models.StarDistModel;
 import org.elephant.cellsparse.tasks.CellsparseInferTask;
 import org.elephant.cellsparse.tasks.CellsparseResetTask;
 import org.elephant.cellsparse.tasks.CellsparseTrainTask;
+import org.locationtech.jts.geom.Envelope;
+import org.locationtech.jts.geom.Geometry;
+import org.locationtech.jts.geom.GeometryCollection;
+import org.locationtech.jts.geom.Polygon;
+import org.locationtech.jts.geom.prep.PreparedGeometry;
+import org.locationtech.jts.geom.prep.PreparedGeometryFactory;
+import org.locationtech.jts.index.strtree.STRtree;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -17,20 +24,27 @@ import java.net.MalformedURLException;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.function.Function;
+import java.util.stream.IntStream;
 import java.util.List;
+import java.util.Map;
+import java.util.LinkedHashSet;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
 import javafx.application.Platform;
 import javafx.beans.binding.Bindings;
 import javafx.beans.property.ReadOnlyObjectProperty;
 import javafx.beans.property.SimpleBooleanProperty;
+import javafx.beans.property.SimpleIntegerProperty;
 import javafx.beans.value.ChangeListener;
 import javafx.beans.value.ObservableValue;
 import javafx.collections.FXCollections;
@@ -61,23 +75,39 @@ import qupath.lib.geom.Point2;
 import qupath.lib.gui.QuPathGUI;
 import qupath.lib.gui.dialogs.Dialogs;
 import qupath.lib.gui.tools.PaneTools;
-import qupath.lib.gui.viewer.OverlayOptions;
 import qupath.lib.gui.viewer.RegionFilter;
-import qupath.lib.gui.viewer.RegionFilter.StandardRegionFilters;
 import qupath.lib.images.ImageData;
+import qupath.lib.images.servers.ColorTransforms.ColorTransform;
+import qupath.lib.images.servers.ColorTransforms;
 import qupath.lib.images.servers.ImageServer;
 import qupath.lib.images.servers.PixelCalibration;
 import qupath.lib.images.servers.TileRequest;
+import qupath.lib.objects.CellTools;
+import qupath.lib.objects.PathCellObject;
 import qupath.lib.objects.PathObject;
+import qupath.lib.objects.PathObjects;
 import qupath.lib.objects.hierarchy.PathObjectHierarchy;
 import qupath.lib.regions.RegionRequest;
+import qupath.lib.roi.GeometryTools;
 import qupath.lib.roi.RoiTools;
 import qupath.lib.roi.interfaces.ROI;
-import qupath.process.gui.commands.ml.PixelClassifierUI;
+import qupath.opencv.ops.ImageDataOp;
+import qupath.opencv.ops.ImageDataServer;
+import qupath.opencv.ops.ImageOps;
 
 public class CellsparsePane extends GridPane {
 
     private static final Logger logger = LoggerFactory.getLogger(CellsparsePane.class);
+
+    /**
+     * Default tile width and height.
+     */
+    public static int defaultTileSize = 1024;
+
+    /**
+     * Default pad size.
+     */
+    public static int defaultPad = 32;
 
     private final CellsparseCommand command;
     private final QuPathGUI qupath;
@@ -87,6 +117,9 @@ public class CellsparsePane extends GridPane {
     private ReadOnlyObjectProperty<CellsparseResolution> selectedResolution;
     private ReadOnlyObjectProperty<RegionFilter> selectedRegionFilter;
     private SimpleBooleanProperty keepExistingProperty = new SimpleBooleanProperty(true);
+    private SimpleIntegerProperty tileWidthProperty = new SimpleIntegerProperty(defaultTileSize);
+    private SimpleIntegerProperty tileHeightProperty = new SimpleIntegerProperty(defaultTileSize);
+    private SimpleIntegerProperty padProperty = new SimpleIntegerProperty(defaultPad);
 
     private ChangeListener<ImageData<BufferedImage>> imageDataListener = new ChangeListener<ImageData<BufferedImage>>() {
 
@@ -102,7 +135,7 @@ public class CellsparsePane extends GridPane {
      * Create a new main pane for the Cellsparse command.
      * 
      * @param command
-     *            The Cellsparse command.
+     *                The Cellsparse command.
      */
     public CellsparsePane(CellsparseCommand command, final QuPathGUI qupath) {
         super();
@@ -124,6 +157,8 @@ public class CellsparsePane extends GridPane {
         addSeparator(row++);
 
         addCheckboxes(row++);
+
+        addNumbers(row++);
 
         addIOButtons(row++);
         addCommandButtons(row++);
@@ -338,7 +373,8 @@ public class CellsparsePane extends GridPane {
     }
 
     /**
-     * Create a {@link ComboBox} that can be used to select the region filter for selected objects.
+     * Create a {@link ComboBox} that can be used to select the region filter for
+     * selected objects.
      * 
      * @param options
      * @return
@@ -358,6 +394,17 @@ public class CellsparsePane extends GridPane {
         keepExisting.setTooltip(new Tooltip("Keep existing annotations when running inference"));
         keepExisting.selectedProperty().bindBidirectional(keepExistingProperty);
         add(keepExisting, 0, row);
+    }
+
+    private void addNumbers(int row) {
+        var tileWidthSpinner = CellsparseUIUtils.createIntegerSpinner(0, Integer.MAX_VALUE, tileWidthProperty, 1,
+                "Tile width");
+        tileWidthSpinner.setTooltip(new Tooltip("Width of a tile used for detection"));
+        var tileHeightSpinner = CellsparseUIUtils.createIntegerSpinner(0, Integer.MAX_VALUE, tileHeightProperty, 1,
+                "Tile height");
+        tileHeightSpinner.setTooltip(new Tooltip("Height of a tile used for detection"));
+        var paneSpinners = PaneTools.createColumnGridControls(tileWidthSpinner, tileHeightSpinner);
+        add(paneSpinners, 0, row, GridPane.REMAINING, 1);
     }
 
     private void addIOButtons(int row) {
@@ -556,64 +603,76 @@ public class CellsparsePane extends GridPane {
             url += "/";
         }
         final double downsample = selectedResolution.get().getPixelCalibration().getAveragedPixelSize().doubleValue();
-        final RegionRequest regionRequest = RegionRequest.createInstance(qupath.getViewer().getServer(), downsample);
-        Collection<TileRequest> tiles = qupath.getViewer().getServer().getTileRequestManager()
-                .getTileRequests(regionRequest);
-        if (regionRequest != null) {
-            double x = (Math.max(0, regionRequest.getMinX())
-                    + Math.min(qupath.getViewer().getServer().getWidth(), regionRequest.getMaxX())) / 2.0;
-            double y = (Math.max(0, regionRequest.getMinY())
-                    + Math.min(qupath.getViewer().getServer().getHeight(), regionRequest.getMaxY())) / 2.0;
-            var p = new Point2(x, y);
-            tiles = new ArrayList<>(tiles);
-            ((List<TileRequest>) tiles).sort(
-                    Comparator.comparingDouble((TileRequest t) -> p.distanceSq(t.getImageX() + t.getImageWidth() / 2.0,
-                            t.getImageY() + t.getImageHeight() / 2.0)));
-        }
-        final RegionFilter regionFilter = selectedRegionFilter.get();
+        final PixelCalibration resolution = qupath.getViewer().getServer().getPixelCalibration()
+                .createScaledInstance(downsample, downsample);
+        final int tw = tileWidthProperty.get();
+        final int th = tileHeightProperty.get();
+        final int pad = padProperty.get();
+        final ColorTransform[] colorTransforms = IntStream.range(0, qupath.getViewer().getServer().nChannels())
+                .mapToObj(c -> ColorTransforms.createChannelExtractor(c))
+                .toArray(ColorTransform[]::new).clone();
+        final ImageDataOp op = ImageOps.buildImageDataOp(colorTransforms);
+        final ImageDataServer<BufferedImage> opServer = ImageOps.buildServer(qupath.getViewer().getImageData(), op,
+                resolution, tw - pad * 2, th - pad * 2);
         final PathObjectHierarchy hierarchy = qupath.getViewer().getImageData().getHierarchy();
         final Collection<PathObject> selectedAnnotations = hierarchy.getSelectionModel().getSelectedObjects();
         final List<PathObject> toRomove = hierarchy.getAnnotationObjects().stream()
                 .filter(pathObject -> pathObject.getPathClass() == null).toList();
-        final ROI union = RoiTools
-                .union(selectedAnnotations.stream().map(it -> it.getROI()).collect(Collectors.toList()));
-        final AtomicInteger tileCount = new AtomicInteger();
+        final RegionFilter regionFilter = selectedRegionFilter.get();
+        final ROI union = regionFilter == SelectedObjectsRegionFilter.EVERYWHERE || selectedAnnotations.isEmpty()
+                ? null
+                : RoiTools.union(selectedAnnotations.stream().map(it -> it.getROI()).collect(Collectors.toList()));
+        RegionRequest regionRequest;
+        if (union == null) {
+            regionRequest = RegionRequest.createInstance(opServer, downsample);
+        } else {
+            regionRequest = RegionRequest.createInstance(
+                    opServer.getPath(),
+                    downsample,
+                    union);
+        }
+        Collection<TileRequest> tiles = qupath.getViewer().getServer().getTileRequestManager()
+                .getTileRequests(regionRequest);
+        tiles = tiles.stream()
+                .filter(t -> union == null || union.getGeometry()
+                        .intersects(GeometryTools.createRectangle(t.getImageX(), t.getImageY(),
+                                t.getImageWidth(), t.getImageHeight())))
+                .collect(Collectors.toList());
         final List<PathObject> detections = Collections.synchronizedList(new ArrayList<>());
-        final int totalTiles = tiles.size();
         List<Future<?>> futures = new ArrayList<>();
         for (TileRequest tile : tiles) {
 
             var request = tile.getRegionRequest();
-
-            if (regionFilter != null && !regionFilter.test(qupath.getImageData(), request)) {
-                if (tileCount.incrementAndGet() == totalTiles) {
-                    finalize(hierarchy, toRomove, detections, union, (SelectedObjectsRegionFilter) regionFilter,
-                            selectedAnnotations);
-                }
-                continue;
-            }
+            var server = qupath.getViewer().getServer();
+            int x1 = (int) Math.max(0, Math.round(request.getX() - downsample * pad));
+            int y1 = (int) Math.max(0, Math.round(request.getY() - downsample * pad));
+            int x2 = (int) Math.min(server.getWidth(), Math.round(request.getMaxX() + downsample * pad));
+            int y2 = (int) Math.min(server.getHeight(), Math.round(request.getMaxY() + downsample * pad));
+            RegionRequest requestPadded = RegionRequest.createInstance(server.getPath(), downsample, x1, y1, x2 - x1,
+                    y2 - y1, request.getZ(), request.getT());
 
             CellsparseInferTask task = CellsparseInferTask.builder(qupath.getViewer())
                     .endpointURL(url.toString())
                     .model(model)
-                    .regionRequest(request)
+                    .regionRequest(requestPadded)
                     .build();
             task.setOnSucceeded(event -> {
                 final List<PathObject> detected = task.getValue();
-                if (detected != null && !task.getValue().isEmpty()) {
+                if (detected != null) {
                     if (!detected.isEmpty()) {
                         detections.addAll(detected);
                     } else {
-                        logger.warn("No objects detected");
+                        logger.info("No objects detected");
                     }
-                }
-                if (tileCount.incrementAndGet() == totalTiles) {
-                    finalize(hierarchy, toRomove, detections, union, (SelectedObjectsRegionFilter) regionFilter,
-                            selectedAnnotations);
+                } else {
+                    logger.info("No objects detected");
                 }
             });
+
             futures.add(submitTask(task));
         }
+
+        // Sychronize the results
         for (Future<?> future : futures) {
             try {
                 future.get();
@@ -625,6 +684,8 @@ public class CellsparsePane extends GridPane {
                 logger.warn("Task is interrupted", e);
             }
         }
+        finalize(hierarchy, toRomove, detections, union, (SelectedObjectsRegionFilter) regionFilter,
+                selectedAnnotations);
     }
 
     private void finalize(PathObjectHierarchy hierarchy, List<PathObject> toRomove, List<PathObject> detections,
@@ -633,11 +694,21 @@ public class CellsparsePane extends GridPane {
             if (!keepExistingProperty.get()) {
                 hierarchy.removeObjects(toRomove, false);
             }
-            hierarchy.addObjects(detections);
+
+            var nuclei = detections.stream().map(
+                    obj -> new PotentialNucleus(obj.getROI().getGeometry(), obj.getROI().getGeometry().getArea(), 0))
+                    .collect(Collectors.toList());
+            var filteredNuclei = filterNuclei(nuclei);
+            var finalDetections = filteredNuclei.stream()
+                    .map(nucleus -> GeometryTools.geometryToROI(nucleus.geometry, qupath.getViewer().getImagePlane()))
+                    .map(roi -> PathObjects.createAnnotationObject(roi))
+                    .collect(Collectors.toList());
+
+            hierarchy.addObjects(finalDetections);
             if (regionFilter == SelectedObjectsRegionFilter.SELECTED_OBJECTS) {
                 hierarchy.removeObjects(selectedAnnotations, false);
                 Collection<PathObject> toKeep = hierarchy.getObjectsForROI(null, union);
-                hierarchy.removeObjects(detections.stream()
+                hierarchy.removeObjects(finalDetections.stream()
                         .filter(pathObject -> !toKeep.contains(pathObject))
                         .collect(Collectors.toList()),
                         false);
@@ -645,8 +716,8 @@ public class CellsparsePane extends GridPane {
                     hierarchy.getSelectionModel().setSelectedObjects(toKeep, toKeep.iterator().next());
                 }
             } else {
-                if (!detections.isEmpty()) {
-                    hierarchy.getSelectionModel().setSelectedObjects(detections, detections.get(0));
+                if (!finalDetections.isEmpty()) {
+                    hierarchy.getSelectionModel().setSelectedObjects(finalDetections, finalDetections.get(0));
                 }
             }
         });
@@ -689,6 +760,163 @@ public class CellsparsePane extends GridPane {
             command.updateInfoText("Model is reset.");
         });
         submitTask(task);
+    }
+
+    private static PathObject objectToCell(PathObject pathObject) {
+        ROI roiNucleus = null;
+        var children = pathObject.getChildObjects();
+        if (children.size() == 1)
+            roiNucleus = children.iterator().next().getROI();
+        else if (children.size() > 1)
+            throw new IllegalArgumentException("Cannot convert object with multiple child objects to a cell!");
+        return PathObjects.createCellObject(pathObject.getROI(), roiNucleus, pathObject.getPathClass(),
+                pathObject.getMeasurementList());
+    }
+
+    private static PathObject cellToObject(PathObject cell, Function<ROI, PathObject> creator) {
+        var parent = creator.apply(cell.getROI());
+        var nucleusROI = cell instanceof PathCellObject ? ((PathCellObject) cell).getNucleusROI() : null;
+        if (nucleusROI != null) {
+            var nucleus = creator.apply(nucleusROI);
+            nucleus.setPathClass(cell.getPathClass());
+            parent.addChildObject(nucleus);
+        }
+        parent.setPathClass(cell.getPathClass());
+        var cellMeasurements = cell.getMeasurementList();
+        if (!cellMeasurements.isEmpty()) {
+            try (var ml = parent.getMeasurementList()) {
+                ml.putAll(cellMeasurements);
+            }
+        }
+        return parent;
+    }
+
+    private static class PotentialNucleus {
+
+        private Geometry geometry;
+        private double fullArea;
+        private double probability;
+        private int classification;
+
+        PotentialNucleus(Geometry geom, double prob, int classification) {
+            this.geometry = geom;
+            this.probability = prob;
+            this.classification = classification;
+            this.fullArea = geom.getArea();
+        }
+
+        double getProbability() {
+            return probability;
+        };
+
+        int getClassification() {
+            return classification;
+        }
+
+    }
+
+    private static List<PotentialNucleus> filterNuclei(List<PotentialNucleus> potentialNuclei) {
+
+        // Sort in descending order of probability
+        Collections.sort(potentialNuclei,
+                Comparator.comparingDouble((PotentialNucleus n) -> n.getProbability()).reversed());
+
+        // Create array of nuclei to keep & to skip
+        var nuclei = new LinkedHashSet<PotentialNucleus>();
+        var skippedNucleus = new HashSet<PotentialNucleus>();
+        int skipErrorCount = 0;
+
+        // Create a spatial cache to find overlaps more quickly
+        // (Because of later tests, we don't need to update envelopes even though
+        // geometries may be modified)
+        Map<Geometry, Envelope> envelopes = new HashMap<>();
+        var tree = new STRtree();
+        for (var nuc : potentialNuclei) {
+            var env = nuc.geometry.getEnvelopeInternal();
+            envelopes.put(nuc.geometry, env);
+            tree.insert(env, nuc);
+        }
+
+        var preparingFactory = new PreparedGeometryFactory();
+
+        for (var nucleus : potentialNuclei) {
+            if (skippedNucleus.contains(nucleus))
+                continue;
+
+            nuclei.add(nucleus);
+            var envelope = envelopes.computeIfAbsent(nucleus.geometry, g -> g.getEnvelopeInternal());
+
+            @SuppressWarnings("unchecked")
+            var overlaps = (List<PotentialNucleus>) tree.query(envelope);
+
+            // Remove the overlaps that we can be sure don't apply using quick tests, to
+            // avoid expensive ones
+            var iter = overlaps.iterator();
+            while (iter.hasNext()) {
+                var nucleus2 = iter.next();
+                if (nucleus2 == nucleus || skippedNucleus.contains(nucleus2) || nuclei.contains(nucleus2))
+                    iter.remove();
+                else {
+                    // Envelope text needed because nuclei can have been modified
+                    var env = envelopes.computeIfAbsent(nucleus2.geometry, g -> g.getEnvelopeInternal());
+                    if (!envelope.intersects(env))
+                        iter.remove();
+                }
+            }
+
+            // If we need to compare a lot of intersections, preparing the geometry can
+            // speed things up
+            PreparedGeometry prepared = null;
+            if (overlaps.size() > 5) {
+                prepared = preparingFactory.create(nucleus.geometry);
+            }
+            for (var nucleus2 : overlaps) {
+                // If we have an overlap, retain the higher-probability nucleus only (i.e. the
+                // one we met first)
+                // Try to refine other nuclei
+                try {
+                    boolean checkDifference = true;
+                    if (prepared == null) {
+                        // We could check for intersection, but it seems faster to just compute
+                        // difference
+                        // (this would warrant some more systematic checking though)
+                        checkDifference = true;// nucleus.geometry.intersects(nucleus2.geometry);
+                    } else
+                        checkDifference = prepared.intersects(nucleus2.geometry);
+                    if (checkDifference) {
+                        // Retain the nucleus only if it is not fragmented, or less than half its
+                        // original area
+                        var difference = nucleus2.geometry.difference(nucleus.geometry);
+
+                        // Discard linestrings
+                        if (difference instanceof GeometryCollection)
+                            difference = GeometryTools.ensurePolygonal(difference);
+
+                        if (difference instanceof Polygon && difference.getArea() > nucleus2.fullArea / 2.0)
+                            nucleus2.geometry = difference;
+                        else {
+                            skippedNucleus.add(nucleus2);
+                        }
+                    }
+                } catch (Exception e) {
+                    logger.debug("Exception resolving nuclei: " + e.getMessage());
+                    logger.trace(e.getMessage(), e);
+                    skippedNucleus.add(nucleus2);
+                    skipErrorCount++;
+                }
+
+            }
+        }
+        if (skipErrorCount > 0) {
+            // Reduce warning to debug - this happens often for 1 or 2 nuclei but isn't
+            // necessarily
+            // a serious problem that the user should be aware of
+            int skipCount = skippedNucleus.size();
+            String s = skipErrorCount == 1 ? "1 nucleus" : skipErrorCount + " nuclei";
+            logger.debug("Skipped {} due to error in resolving overlaps ({}% of all skipped)",
+                    s, GeneralTools.formatNumber(skipErrorCount * 100.0 / skipCount, 1));
+        }
+        return new ArrayList<>(nuclei);
     }
 
 }
