@@ -77,8 +77,8 @@ public class CellposeModel extends
     }
 
     @Override
-    public String getRequestBodyStringTrain(String b64img, String b64lbl) {
-        CellposeTrainBody body = ((CellposeTrainBody.Builder) getDefaultTrainBodyBuilder(b64img, b64lbl))
+    public String getRequestBodyStringTrain(List<String> b64imgs, List<String> b64lbls) {
+        CellposeTrainBody body = ((CellposeTrainBody.Builder) getDefaultTrainBodyBuilder(b64imgs, b64lbls))
                 .chan1(((IntParameter) getParameter(getParameterList(), PARAM_KEY_CHAN1)).getValue())
                 .chan2(((IntParameter) getParameter(getParameterList(), PARAM_KEY_CHAN2)).getValue())
                 .build();

@@ -1,5 +1,7 @@
 package org.elephant.cellsparse.models;
 
+import java.util.List;
+
 import javafx.scene.Node;
 import qupath.lib.plugins.parameters.Parameter;
 import qupath.lib.plugins.parameters.ParameterList;
@@ -98,7 +100,7 @@ public abstract class CellsparseModel {
      * 
      * @return the body string for training.
      */
-    public abstract String getRequestBodyStringTrain(String b64img, String b64lbl);
+    public abstract String getRequestBodyStringTrain(List<String> b64imgs, List<String> b64lbls);
 
     /**
      * Get request body string for inference.

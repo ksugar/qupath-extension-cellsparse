@@ -72,8 +72,8 @@ public class StarDistModel extends
     }
 
     @Override
-    public String getRequestBodyStringTrain(String b64img, String b64lbl) {
-        StarDistTrainBody body = ((StarDistTrainBody.Builder) getDefaultTrainBodyBuilder(b64img, b64lbl))
+    public String getRequestBodyStringTrain(List<String> b64imgs, List<String> b64lbls) {
+        StarDistTrainBody body = ((StarDistTrainBody.Builder) getDefaultTrainBodyBuilder(b64imgs, b64lbls))
                 .n_channels_in(((IntParameter) getParameter(getParameterList(), PARAM_KEY_N_CHANNELS_IN)).getValue())
                 .build();
         return GsonTools.getInstance().toJson(body);

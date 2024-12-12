@@ -562,28 +562,79 @@ public class CellsparsePane extends GridPane {
         if (!url.endsWith("/")) {
             url += "/";
         }
+        final double downsample = selectedResolution.get().getPixelCalibration().getAveragedPixelSize().doubleValue();
+        final PixelCalibration resolution = qupath.getViewer().getServer().getPixelCalibration()
+                .createScaledInstance(downsample, downsample);
+        final int tw = tileWidthProperty.get();
+        final int th = tileHeightProperty.get();
+        final int pad = padProperty.get();
+        final ColorTransform[] colorTransforms = IntStream.range(0, qupath.getViewer().getServer().nChannels())
+                .mapToObj(c -> ColorTransforms.createChannelExtractor(c))
+                .toArray(ColorTransform[]::new).clone();
+        final ImageDataOp op = ImageOps.buildImageDataOp(colorTransforms);
+        final ImageDataServer<BufferedImage> opServer = ImageOps.buildServer(qupath.getViewer().getImageData(), op,
+                resolution, tw - pad * 2, th - pad * 2);
+        final PathObjectHierarchy hierarchy = qupath.getViewer().getImageData().getHierarchy();
+        final Collection<PathObject> selectedAnnotations = hierarchy.getSelectionModel().getSelectedObjects();
+        final RegionFilter regionFilter = selectedRegionFilter.get();
+        final ROI union = regionFilter == SelectedObjectsRegionFilter.EVERYWHERE || selectedAnnotations.isEmpty()
+                ? null
+                : RoiTools.union(selectedAnnotations.stream().map(it -> it.getROI()).collect(Collectors.toList()));
+
+        // Get the RegionRequest with the downsample (and union)
+        RegionRequest regionRequest;
+        if (union == null) {
+            regionRequest = RegionRequest.createInstance(opServer, downsample);
+        } else {
+            regionRequest = RegionRequest.createInstance(
+                    opServer.getPath(),
+                    downsample,
+                    union);
+        }
+        Collection<TileRequest> tiles = qupath.getViewer().getServer().getTileRequestManager()
+                .getTileRequests(regionRequest);
+        tiles = tiles.stream()
+                .filter(t -> union == null || union.getGeometry()
+                        .intersects(GeometryTools.createRectangle(t.getImageX(), t.getImageY(),
+                                t.getImageWidth(), t.getImageHeight())))
+                .collect(Collectors.toList());
+        List<Future<?>> futures = new ArrayList<>();
+        List<RegionRequest> regionRequests = new ArrayList<>();
+        for (TileRequest tile : tiles) {
+            var request = tile.getRegionRequest();
+            var server = qupath.getViewer().getServer();
+            int x1 = (int) Math.max(0, Math.round(request.getX() - downsample * pad));
+            int y1 = (int) Math.max(0, Math.round(request.getY() - downsample * pad));
+            int x2 = (int) Math.min(server.getWidth(), Math.round(request.getMaxX() + downsample * pad));
+            int y2 = (int) Math.min(server.getHeight(), Math.round(request.getMaxY() + downsample * pad));
+            RegionRequest requestPadded = RegionRequest.createInstance(server.getPath(), downsample, x1, y1, x2 - x1,
+                    y2 - y1, request.getZ(), request.getT());
+            regionRequests.add(requestPadded);
+        }
+
         CellsparseTrainTask task = CellsparseTrainTask.builder(qupath.getViewer())
                 .endpointURL(url.toString())
                 .model(model)
+                .regionRequests(regionRequests)
                 .build();
         task.setOnSucceeded(event -> {
-            List<PathObject> detected = task.getValue();
-            if (detected != null && !task.getValue().isEmpty()) {
-                if (!detected.isEmpty()) {
-                    Platform.runLater(() -> {
-                        PathObjectHierarchy hierarchy = qupath.getViewer().getImageData().getHierarchy();
-                        List<PathObject> toRomove = hierarchy.getAnnotationObjects().stream()
-                                .filter(pathObject -> pathObject.getPathClass() == null).toList();
-                        hierarchy.removeObjects(toRomove, false);
-                        hierarchy.addObjects(detected);
-                        hierarchy.getSelectionModel().setSelectedObjects(detected, detected.get(0));
-                    });
-                } else {
-                    logger.warn("No objects detected");
-                }
-            }
+            command.updateInfoText("Training is done");
         });
-        submitTask(task);
+
+        futures.add(submitTask(task));
+
+        // Sychronize the results
+        for (Future<?> future : futures) {
+            try {
+                future.get();
+            } catch (CancellationException e) {
+                logger.warn("Task is cancelled", e);
+            } catch (ExecutionException e) {
+                logger.warn("Error while waiting for task to complete", e);
+            } catch (InterruptedException e) {
+                logger.warn("Task is interrupted", e);
+            }
+        }
     }
 
     /**
@@ -694,8 +745,13 @@ public class CellsparsePane extends GridPane {
                 logger.warn("Task is interrupted", e);
             }
         }
-        finalize(hierarchy, toRomove, detections, union, (SelectedObjectsRegionFilter) regionFilter,
-                selectedAnnotations);
+
+        Platform.runLater(() -> {
+            finalize(hierarchy, toRomove, detections, union,
+                    (SelectedObjectsRegionFilter) regionFilter,
+                    selectedAnnotations);
+        });
+
     }
 
     /**
@@ -710,37 +766,35 @@ public class CellsparsePane extends GridPane {
      */
     private void finalize(PathObjectHierarchy hierarchy, List<PathObject> toRomove, List<PathObject> detections,
             ROI union, SelectedObjectsRegionFilter regionFilter, Collection<PathObject> selectedAnnotations) {
-        Platform.runLater(() -> {
-            if (!keepExistingProperty.get()) {
-                hierarchy.removeObjects(toRomove, false);
-            }
+        if (!keepExistingProperty.get()) {
+            hierarchy.removeObjects(toRomove, false);
+        }
 
-            var nuclei = detections.stream().map(
-                    obj -> new PotentialNucleus(obj.getROI().getGeometry(), obj.getROI().getGeometry().getArea(), 0))
-                    .collect(Collectors.toList());
-            var filteredNuclei = filterNuclei(nuclei);
-            var finalDetections = filteredNuclei.stream()
-                    .map(nucleus -> GeometryTools.geometryToROI(nucleus.geometry, qupath.getViewer().getImagePlane()))
-                    .map(roi -> PathObjects.createAnnotationObject(roi))
-                    .collect(Collectors.toList());
+        var nuclei = detections.stream().map(
+                obj -> new PotentialNucleus(obj.getROI().getGeometry(), obj.getROI().getGeometry().getArea(), 0))
+                .collect(Collectors.toList());
+        var filteredNuclei = filterNuclei(nuclei);
+        var finalDetections = filteredNuclei.stream()
+                .map(nucleus -> GeometryTools.geometryToROI(nucleus.geometry, qupath.getViewer().getImagePlane()))
+                .map(roi -> PathObjects.createAnnotationObject(roi))
+                .collect(Collectors.toList());
 
-            hierarchy.addObjects(finalDetections);
-            if (regionFilter == SelectedObjectsRegionFilter.SELECTED_OBJECTS) {
-                hierarchy.removeObjects(selectedAnnotations, false);
-                Collection<PathObject> toKeep = hierarchy.getObjectsForROI(null, union);
-                hierarchy.removeObjects(finalDetections.stream()
-                        .filter(pathObject -> !toKeep.contains(pathObject))
-                        .collect(Collectors.toList()),
-                        false);
-                if (!toKeep.isEmpty()) {
-                    hierarchy.getSelectionModel().setSelectedObjects(toKeep, toKeep.iterator().next());
-                }
-            } else {
-                if (!finalDetections.isEmpty()) {
-                    hierarchy.getSelectionModel().setSelectedObjects(finalDetections, finalDetections.get(0));
-                }
+        hierarchy.addObjects(finalDetections);
+        if (regionFilter == SelectedObjectsRegionFilter.SELECTED_OBJECTS) {
+            hierarchy.removeObjects(selectedAnnotations, false);
+            Collection<PathObject> toKeep = hierarchy.getObjectsForROI(null, union);
+            hierarchy.removeObjects(finalDetections.stream()
+                    .filter(pathObject -> !toKeep.contains(pathObject))
+                    .collect(Collectors.toList()),
+                    false);
+            if (!toKeep.isEmpty()) {
+                hierarchy.getSelectionModel().setSelectedObjects(toKeep, toKeep.iterator().next());
             }
-        });
+        } else {
+            if (!finalDetections.isEmpty()) {
+                hierarchy.getSelectionModel().setSelectedObjects(finalDetections, finalDetections.get(0));
+            }
+        }
     }
 
     /**

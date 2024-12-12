@@ -5,6 +5,7 @@ import java.io.IOException;
 import java.lang.reflect.Type;
 import java.net.HttpURLConnection;
 import java.net.http.HttpResponse;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
@@ -22,9 +23,7 @@ import qupath.lib.gui.viewer.QuPathViewer;
 import qupath.lib.images.ImageData;
 import qupath.lib.images.servers.LabeledImageServer;
 import qupath.lib.images.servers.LabeledOffsetImageServer;
-import qupath.lib.io.GsonTools;
 import qupath.lib.objects.PathObject;
-import qupath.lib.objects.PathROIObject;
 import qupath.lib.objects.classes.PathClass;
 import qupath.lib.regions.RegionRequest;
 
@@ -35,7 +34,7 @@ public class CellsparseTrainTask extends CellsparseTask {
     private final ImageData<BufferedImage> imageData;
     private final String endpointURL;
     private final CellsparseModel model;
-    private final RegionRequest regionRequest;
+    private final List<RegionRequest> regionRequests;
 
     public CellsparseTrainTask(Builder builder) {
         QuPathViewer viewer = builder.viewer;
@@ -44,44 +43,45 @@ public class CellsparseTrainTask extends CellsparseTask {
         this.imageData = viewer.getImageData();
         this.endpointURL = builder.endpointURL;
         this.model = builder.model;
-        if (builder.regionRequest == null) {
-            this.regionRequest = RegionRequest.createInstance(imageData.getServer());
+        if (builder.regionRequests == null) {
+            this.regionRequests = new ArrayList<>();
+            this.regionRequests.add(RegionRequest.createInstance(imageData.getServer()));
         } else {
-            this.regionRequest = builder.regionRequest;
+            this.regionRequests = builder.regionRequests;
         }
     }
 
     @Override
     protected List<PathObject> call() throws Exception {
-        final BufferedImage image = readRegionFromServer(imageData.getServer(), regionRequest);
-        final String strImage = base64Encode(image);
-
-        final LabeledImageServer bgLabelServer = new LabeledImageServer.Builder(imageData)
-                .backgroundLabel(0).addLabel("Background", 1).multichannelOutput(false).build();
-        final BufferedImage bgImage = readRegionFromServer(bgLabelServer, regionRequest);
-        final LabeledOffsetImageServer fgLabelServer = new LabeledOffsetImageServer.Builder(imageData)
-                .useFilter(pathObject -> pathObject
-                        .getPathClass() == PathClass.getInstance("Foreground"))
-                .useInstanceLabels()
-                .offset(1).build();
-        final BufferedImage fgImage = readRegionFromServer(fgLabelServer, regionRequest);
-        final ImageCalculator imageCalculator = new ImageCalculator();
-        final ImagePlus bgImp = IJTools.convertToUncalibratedImagePlus("Background", bgImage);
-        final ImagePlus fgImp = IJTools.convertToUncalibratedImagePlus("Foreground", fgImage);
-        final BufferedImage lblImage = imageCalculator.run("Max", bgImp, fgImp).getBufferedImage();
-        final String strLabel = base64Encode(lblImage);
-        final Gson gson = GsonTools.getInstance();
-        final String bodyJson = model.getRequestBodyStringTrain(strImage, strLabel);
-        final Type type = new com.google.gson.reflect.TypeToken<List<PathObject>>() {
-        }.getType();
+        updateProgress(0, 1);
+        List<String> strImages = new ArrayList<>();
+        List<String> strLabels = new ArrayList<>();
+        for (RegionRequest regionRequest : regionRequests) {
+            final BufferedImage image = readRegionFromServer(imageData.getServer(), regionRequest);
+            final String strImage = base64Encode(image);
+            strImages.add(strImage);
+            final LabeledImageServer bgLabelServer = new LabeledImageServer.Builder(imageData)
+                    .backgroundLabel(0).addLabel("Background", 1).multichannelOutput(false).build();
+            final BufferedImage bgImage = readRegionFromServer(bgLabelServer, regionRequest);
+            final LabeledOffsetImageServer fgLabelServer = new LabeledOffsetImageServer.Builder(imageData)
+                    .useFilter(pathObject -> pathObject
+                            .getPathClass() == PathClass.getInstance("Foreground"))
+                    .useInstanceLabels()
+                    .offset(1).build();
+            final BufferedImage fgImage = readRegionFromServer(fgLabelServer, regionRequest);
+            final ImageCalculator imageCalculator = new ImageCalculator();
+            final ImagePlus bgImp = IJTools.convertToUncalibratedImagePlus("Background", bgImage);
+            final ImagePlus fgImp = IJTools.convertToUncalibratedImagePlus("Foreground", fgImage);
+            final BufferedImage lblImage = imageCalculator.run("Max", bgImp, fgImp).getBufferedImage();
+            final String strLabel = base64Encode(lblImage);
+            strLabels.add(strLabel);
+        }
+        final String bodyJson = model.getRequestBodyStringTrain(strImages, strLabels);
         try {
             HttpResponse<String> response = CellsparseTrainTask.sendRequest(endpointURL, bodyJson);
             if (response.statusCode() == HttpURLConnection.HTTP_OK) {
-                List<PathObject> pathObjects = gson.fromJson(response.body(), type);
-                for (PathObject pathObject : pathObjects) {
-                    ((PathROIObject) pathObject).setROI(scaleAndTranslatePathObject(pathObject, regionRequest));
-                }
-                return pathObjects;
+                logger.info("Training have been done successfully");
+                return Collections.emptyList();
             } else {
                 logger.warn(String.format("HTTP error: %d\n%s", response.statusCode(), response.body()));
                 return Collections.emptyList();
@@ -89,6 +89,8 @@ public class CellsparseTrainTask extends CellsparseTask {
         } catch (IOException | InterruptedException e) {
             logger.warn("Interrupted while sending request to server", e);
             return Collections.emptyList();
+        } finally {
+            updateProgress(1, 1);
         }
     }
 
@@ -112,7 +114,7 @@ public class CellsparseTrainTask extends CellsparseTask {
 
         private String endpointURL;
         private CellsparseModel model;
-        private RegionRequest regionRequest;
+        private List<RegionRequest> regionRequests;
 
         private Builder(QuPathViewer viewer) {
             this.viewer = viewer;
@@ -143,11 +145,11 @@ public class CellsparseTrainTask extends CellsparseTask {
         /**
          * Specify the region request (required).
          * 
-         * @param regionRequest
+         * @param List<regionRequest>
          * @return this builder
          */
-        public Builder regionRequest(final RegionRequest regionRequest) {
-            this.regionRequest = regionRequest;
+        public Builder regionRequests(final List<RegionRequest> regionRequests) {
+            this.regionRequests = regionRequests;
             return this;
         }
 

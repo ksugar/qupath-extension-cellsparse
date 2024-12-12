@@ -52,6 +52,7 @@ public class CellsparseInferTask extends CellsparseTask {
 
     @Override
     protected List<PathObject> call() throws Exception {
+        updateProgress(0, 1);
         final BufferedImage image = readRegionFromServer(imageData.getServer(), regionRequest);
         final String strImage = base64Encode(image);
 
@@ -74,6 +75,8 @@ public class CellsparseInferTask extends CellsparseTask {
         } catch (IOException | InterruptedException e) {
             logger.warn("Interrupted while sending request to server", e);
             return Collections.emptyList();
+        } finally {
+            updateProgress(1, 1);
         }
     }
 

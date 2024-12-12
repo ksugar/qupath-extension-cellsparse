@@ -320,11 +320,11 @@ public abstract class AbstractCellsparseModel<T extends AbstractCellsparseModel.
 
     abstract V getResetBodyBuilder();
 
-    CellsparseTrainBody.Builder getDefaultTrainBodyBuilder(String b64img, String b64lbl) {
+    CellsparseTrainBody.Builder getDefaultTrainBodyBuilder(List<String> b64imgs, List<String> b64lbls) {
         return getTrainBodyBuilder()
                 .modelname(((StringParameter) getParameter(getParameterList(), PARAM_KEY_MODELNAME)).getValue())
-                .b64img(b64img)
-                .b64lbl(b64lbl)
+                .b64imgs(b64imgs)
+                .b64lbls(b64lbls)
                 .train(true)
                 .eval(true)
                 .trainpatch(((IntParameter) getParameter(getParameterList(), PARAM_KEY_TRAINPATCH)).getValue())
@@ -422,9 +422,9 @@ public abstract class AbstractCellsparseModel<T extends AbstractCellsparseModel.
         @SuppressWarnings("unused")
         private String modelname;
         @SuppressWarnings("unused")
-        private String b64img;
+        private List<String> b64imgs;
         @SuppressWarnings("unused")
-        private String b64lbl;
+        private List<String> b64lbls;
         @SuppressWarnings("unused")
         private boolean train;
         @SuppressWarnings("unused")
@@ -446,8 +446,8 @@ public abstract class AbstractCellsparseModel<T extends AbstractCellsparseModel.
 
         public CellsparseTrainBody(final Builder builder) {
             this.modelname = builder.modelname;
-            this.b64img = builder.b64img;
-            this.b64lbl = builder.b64lbl;
+            this.b64imgs = builder.b64imgs;
+            this.b64lbls = builder.b64lbls;
             this.train = builder.train;
             this.eval = builder.eval;
             this.trainpatch = builder.trainpatch;
@@ -461,8 +461,8 @@ public abstract class AbstractCellsparseModel<T extends AbstractCellsparseModel.
 
         public static class Builder {
             private String modelname;
-            private String b64img;
-            private String b64lbl = null;
+            private List<String> b64imgs;
+            private List<String> b64lbls = null;
             private boolean train = true;
             private boolean eval = true;
             private int trainpatch = 224;
@@ -481,13 +481,13 @@ public abstract class AbstractCellsparseModel<T extends AbstractCellsparseModel.
                 return this;
             }
 
-            public Builder b64img(final String b64img) {
-                this.b64img = b64img;
+            public Builder b64imgs(final List<String> b64imgs) {
+                this.b64imgs = b64imgs;
                 return this;
             }
 
-            public Builder b64lbl(final String b64lbl) {
-                this.b64lbl = b64lbl;
+            public Builder b64lbls(final List<String> b64lbls) {
+                this.b64lbls = b64lbls;
                 return this;
             }
 

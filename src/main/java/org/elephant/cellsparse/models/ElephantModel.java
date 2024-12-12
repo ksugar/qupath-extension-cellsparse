@@ -64,8 +64,8 @@ public class ElephantModel extends
     }
 
     @Override
-    public String getRequestBodyStringTrain(String b64img, String b64lbl) {
-        ElephantTrainBody body = ((ElephantTrainBody.Builder) getDefaultTrainBodyBuilder(b64img, b64lbl)).build();
+    public String getRequestBodyStringTrain(List<String> b64imgs, List<String> b64lbls) {
+        ElephantTrainBody body = ((ElephantTrainBody.Builder) getDefaultTrainBodyBuilder(b64imgs, b64lbls)).build();
         return GsonTools.getInstance().toJson(body);
     }
 
