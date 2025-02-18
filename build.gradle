@@ -5,6 +5,7 @@ plugins {
   id 'groovy'
   // To create a shadow/fat jar that bundle up all dependencies
   id 'com.github.johnrengelman.shadow' version '7.1.2'
+  id 'org.openjfx.javafxplugin' version '0.1.0'
   // Include this plugin to avoid downloading JavaCPP dependencies for all platforms
   id 'org.bytedeco.gradle-javacpp-platform'
   // Dependency report
@@ -21,6 +22,7 @@ description = 'QuPath extension CellSparse'
 // TODO: Specify the QuPath version, compatible with the extension.
 // The default 'gradle.ext.qupathVersion' reads this from settings.gradle.
 ext.qupathVersion = gradle.ext.qupathVersion
+ext.qupathFxtrasVersion = gradle.ext.qupathFxtrasVersion
 
 // TODO: Specify the Java version compatible with the extension
 // Generally 11 for QuPath v0.4.3, but will be 17 for QuPath v0.5.0
@@ -51,8 +53,10 @@ dependencies {
     // If you aren't using Groovy, this can be removed
     shadow libs.bundles.groovy
 
-    testImplementation "io.github.qupath:qupath-gui-fx:${qupathVersion}"
-    testImplementation "io.github.qupath:qupath-extension-processing:${qupathVersion}"
+    implementation "io.github.qupath:qupath-gui-fx:${qupathVersion}"
+    implementation "io.github.qupath:qupath-extension-processing:${qupathVersion}"
+    implementation "io.github.qupath:qupath-fxtras:${qupathFxtrasVersion}"
+
     testImplementation libs.junit
 
     // Add additional dependencies here

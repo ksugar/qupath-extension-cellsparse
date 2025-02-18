@@ -8,7 +8,7 @@ import javafx.scene.control.Tooltip;
 import javafx.scene.layout.ColumnConstraints;
 import javafx.scene.layout.GridPane;
 import javafx.scene.layout.Priority;
-import qupath.lib.gui.tools.GuiTools;
+import qupath.fx.utils.FXUtils;
 
 public class CellsparseUIUtils {
 
@@ -77,8 +77,8 @@ public class CellsparseUIUtils {
         spinner.setTooltip(new Tooltip(tooltipText));
         property.asObject().bindBidirectional(spinner.getValueFactory().valueProperty());
         spinner.setEditable(true);
-        GuiTools.restrictTextFieldInputToNumber(spinner.getEditor(), false);
-        GuiTools.resetSpinnerNullToPrevious(spinner);
+        FXUtils.restrictTextFieldInputToNumber(spinner.getEditor(), false);
+        FXUtils.resetSpinnerNullToPrevious(spinner);
         spinner.focusedProperty().addListener((v, o, n) -> {
             if (spinner.getEditor().getText().equals(""))
                 spinner.getValueFactory().valueProperty().set(min);
@@ -115,8 +115,8 @@ public class CellsparseUIUtils {
         spinner.setTooltip(new Tooltip(tooltipText));
         property.asObject().bindBidirectional(spinner.getValueFactory().valueProperty());
         spinner.setEditable(true);
-        GuiTools.restrictTextFieldInputToNumber(spinner.getEditor(), true);
-        GuiTools.resetSpinnerNullToPrevious(spinner);
+        FXUtils.restrictTextFieldInputToNumber(spinner.getEditor(), true);
+        FXUtils.resetSpinnerNullToPrevious(spinner);
         spinner.focusedProperty().addListener((v, o, n) -> {
             if (spinner.getEditor().getText().equals(""))
                 spinner.getValueFactory().valueProperty().set(min);

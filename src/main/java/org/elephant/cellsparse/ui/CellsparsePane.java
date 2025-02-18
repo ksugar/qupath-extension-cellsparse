@@ -69,10 +69,10 @@ import javafx.scene.layout.GridPane;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.StackPane;
 import javafx.scene.text.TextAlignment;
+import qupath.fx.dialogs.Dialogs;
+import qupath.fx.utils.GridPaneUtils;
 import qupath.lib.common.GeneralTools;
 import qupath.lib.gui.QuPathGUI;
-import qupath.lib.gui.dialogs.Dialogs;
-import qupath.lib.gui.tools.PaneTools;
 import qupath.lib.gui.viewer.RegionFilter;
 import qupath.lib.images.ImageData;
 import qupath.lib.images.servers.ColorTransforms.ColorTransform;
@@ -324,7 +324,7 @@ public class CellsparsePane extends GridPane {
         var imageData = qupath.getImageData();
         ImageServer<BufferedImage> server = imageData == null ? null : imageData.getServer();
         if (server == null) {
-            Dialogs.showNoImageError("Add resolution");
+            Dialogs.showErrorMessage("Add resolution", "No image is available!");
             return false;
         }
         String units = null;
@@ -403,7 +403,7 @@ public class CellsparsePane extends GridPane {
         tileHeightLabelContainer.setAlignment(Pos.CENTER);
         var tileHeightSpinner = CellsparseUIUtils.createIntegerSpinner(0, Integer.MAX_VALUE, tileHeightProperty, 1,
                 "Height of a tile used for detection");
-        var paneSpinners = PaneTools.createColumnGridControls(
+        var paneSpinners = GridPaneUtils.createColumnGridControls(
                 tileWidthLabelContainer, tileWidthSpinner,
                 tileHeightLabelContainer, tileHeightSpinner);
         paneSpinners.setHgap(10);
@@ -429,7 +429,7 @@ public class CellsparsePane extends GridPane {
         });
         btnSave.disableProperty().bind(qupath.projectProperty().isNull());
 
-        var paneIO = PaneTools.createColumnGridControls(btnReset, btnSave);
+        var paneIO = GridPaneUtils.createColumnGridControls(btnReset, btnSave);
         add(paneIO, 0, row, GridPane.REMAINING, 1);
     }
 
@@ -452,7 +452,7 @@ public class CellsparsePane extends GridPane {
         });
         btnInfer.disableProperty().bind(qupath.projectProperty().isNull());
 
-        var paneCommand = PaneTools.createColumnGridControls(btnTrain, btnInfer);
+        var paneCommand = GridPaneUtils.createColumnGridControls(btnTrain, btnInfer);
         add(paneCommand, 0, row, GridPane.REMAINING, 1);
     }
 

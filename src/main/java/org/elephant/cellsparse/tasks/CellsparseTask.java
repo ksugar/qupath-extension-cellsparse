@@ -12,7 +12,7 @@ import java.util.List;
 import javax.imageio.ImageIO;
 
 import javafx.concurrent.Task;
-import qupath.lib.gui.dialogs.Dialogs;
+import qupath.fx.dialogs.Dialogs;
 import qupath.lib.images.servers.ImageServer;
 import qupath.lib.objects.PathObject;
 import qupath.lib.regions.RegionRequest;

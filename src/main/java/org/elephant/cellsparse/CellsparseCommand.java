@@ -26,9 +26,9 @@ import javafx.concurrent.Task;
 import javafx.scene.Scene;
 import javafx.scene.layout.Pane;
 import javafx.stage.Stage;
+import qupath.fx.dialogs.Dialogs;
 import qupath.lib.common.ThreadTools;
 import qupath.lib.gui.QuPathGUI;
-import qupath.lib.gui.dialogs.Dialogs;
 import qupath.lib.gui.prefs.PathPrefs;
 import qupath.lib.images.ImageData;
 
@@ -158,7 +158,7 @@ public class CellsparseCommand implements Runnable {
         var qupath = QuPathGUI.getInstance();
         var imageData = qupath.getImageData();
         if (imageData == null) {
-            Dialogs.showNoImageError("Cellsparse");
+            Dialogs.showErrorMessage("Cellsparse", "No image is available!");
         } else {
             showStage();
         }
