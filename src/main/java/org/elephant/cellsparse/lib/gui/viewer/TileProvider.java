@@ -33,7 +33,6 @@ public class TileProvider {
     private final List<PathObject> pathObjectsToRemove;
     private final RegionFilter regionFilter;
     private final ROI union;
-    private final RegionRequest unionRegionRequest;
     private final Collection<TileRequest> tiles;
 
     public TileProvider(Builder builder) {
@@ -63,8 +62,7 @@ public class TileProvider {
         this.union = regionFilter == SelectedObjectsRegionFilter.EVERYWHERE || selectedAnnotations.isEmpty()
                 ? null
                 : RoiTools.union(selectedAnnotations.stream().map(it -> it.getROI()).collect(Collectors.toList()));
-        this.unionRegionRequest = createRegionRequest(opServer, union);
-        this.tiles = getTileRequests(unionRegionRequest, union);
+        this.tiles = getTileRequests(opServer, union);
     }
 
     private RegionRequest createRegionRequest(ImageDataServer<BufferedImage> opServer, ROI union) {
@@ -78,9 +76,9 @@ public class TileProvider {
         }
     }
 
-    private Collection<TileRequest> getTileRequests(RegionRequest regionRequest, ROI union) {
-        return viewer.getServer().getTileRequestManager()
-                .getTileRequests(regionRequest)
+    private Collection<TileRequest> getTileRequests(ImageDataServer<BufferedImage> opServer, ROI union) {
+        return opServer.getTileRequestManager()
+                .getTileRequests(createRegionRequest(opServer, union))
                 .stream()
                 .filter(t -> union == null || union.getGeometry()
                         .intersects(GeometryTools.createRectangle(t.getImageX(), t.getImageY(),
@@ -144,10 +142,6 @@ public class TileProvider {
 
     public ROI getUnion() {
         return union;
-    }
-
-    public RegionRequest getUnionRegionRequest() {
-        return unionRegionRequest;
     }
 
     public Collection<TileRequest> getTiles() {
