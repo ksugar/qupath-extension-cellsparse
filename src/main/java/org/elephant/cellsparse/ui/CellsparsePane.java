@@ -2,12 +2,14 @@ package org.elephant.cellsparse.ui;
 
 import org.elephant.cellsparse.CellsparseCommand;
 import org.elephant.cellsparse.lib.gui.viewer.SelectedObjectsRegionFilter;
+import org.elephant.cellsparse.lib.gui.viewer.TileProvider;
 import org.elephant.cellsparse.models.CellposeModel;
 import org.elephant.cellsparse.models.CellsparseModel;
 import org.elephant.cellsparse.models.ElephantModel;
 import org.elephant.cellsparse.models.StarDistModel;
 import org.elephant.cellsparse.tasks.CellsparseInferTask;
 import org.elephant.cellsparse.tasks.CellsparseResetTask;
+import org.elephant.cellsparse.tasks.CellsparseTaskUtils;
 import org.elephant.cellsparse.tasks.CellsparseTrainTask;
 import org.locationtech.jts.geom.Envelope;
 import org.locationtech.jts.geom.Geometry;
@@ -29,7 +31,6 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.stream.IntStream;
 import java.util.List;
 import java.util.Map;
 import java.util.LinkedHashSet;
@@ -48,7 +49,6 @@ import javafx.beans.value.ObservableValue;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
 import javafx.concurrent.Task;
-import javafx.concurrent.Worker;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Node;
@@ -58,6 +58,7 @@ import javafx.scene.control.ComboBox;
 import javafx.scene.control.Control;
 import javafx.scene.control.Label;
 import javafx.scene.control.OverrunStyle;
+import javafx.scene.control.ProgressBar;
 import javafx.scene.control.ProgressIndicator;
 import javafx.scene.control.Separator;
 import javafx.scene.input.MouseEvent;
@@ -75,8 +76,6 @@ import qupath.lib.common.GeneralTools;
 import qupath.lib.gui.QuPathGUI;
 import qupath.lib.gui.viewer.RegionFilter;
 import qupath.lib.images.ImageData;
-import qupath.lib.images.servers.ColorTransforms.ColorTransform;
-import qupath.lib.images.servers.ColorTransforms;
 import qupath.lib.images.servers.ImageServer;
 import qupath.lib.images.servers.PixelCalibration;
 import qupath.lib.images.servers.TileRequest;
@@ -85,11 +84,7 @@ import qupath.lib.objects.PathObjects;
 import qupath.lib.objects.hierarchy.PathObjectHierarchy;
 import qupath.lib.regions.RegionRequest;
 import qupath.lib.roi.GeometryTools;
-import qupath.lib.roi.RoiTools;
 import qupath.lib.roi.interfaces.ROI;
-import qupath.opencv.ops.ImageDataOp;
-import qupath.opencv.ops.ImageDataServer;
-import qupath.opencv.ops.ImageOps;
 
 public class CellsparsePane extends GridPane {
 
@@ -98,12 +93,12 @@ public class CellsparsePane extends GridPane {
     /**
      * Default tile width and height.
      */
-    public static int defaultTileSize = 1024;
+    public static final int DEFAULT_TILE_SIZE = 512;
 
     /**
      * Default pad size.
      */
-    public static int defaultPad = 32;
+    public static final int DEFAULT_PAD = 32;
 
     private final CellsparseCommand command;
     private final QuPathGUI qupath;
@@ -113,9 +108,9 @@ public class CellsparsePane extends GridPane {
     private ReadOnlyObjectProperty<CellsparseResolution> selectedResolution;
     private ReadOnlyObjectProperty<RegionFilter> selectedRegionFilter;
     private SimpleBooleanProperty keepExistingProperty = new SimpleBooleanProperty(true);
-    private SimpleIntegerProperty tileWidthProperty = new SimpleIntegerProperty(defaultTileSize);
-    private SimpleIntegerProperty tileHeightProperty = new SimpleIntegerProperty(defaultTileSize);
-    private SimpleIntegerProperty padProperty = new SimpleIntegerProperty(defaultPad);
+    private SimpleIntegerProperty tileWidthProperty = new SimpleIntegerProperty(DEFAULT_TILE_SIZE);
+    private SimpleIntegerProperty tileHeightProperty = new SimpleIntegerProperty(DEFAULT_TILE_SIZE);
+    private SimpleIntegerProperty padProperty = new SimpleIntegerProperty(DEFAULT_PAD);
 
     private ChangeListener<ImageData<BufferedImage>> imageDataListener = new ChangeListener<ImageData<BufferedImage>>() {
 
@@ -162,6 +157,7 @@ public class CellsparsePane extends GridPane {
         addSeparator(row++);
 
         addInfoPane(row++);
+        addProgressPane(row++);
         addEventFilter(MouseEvent.MOUSE_MOVED, this::handleMouseMoved);
 
         setHgap(CellsparseUIUtils.H_GAP);
@@ -197,6 +193,8 @@ public class CellsparsePane extends GridPane {
     }
 
     private void handleMouseMoved(MouseEvent event) {
+        if (command.getIsTaskRunning().get())
+            return;
         Node node = event.getPickResult().getIntersectedNode();
         while (node != null) {
             if (node instanceof Control) {
@@ -475,66 +473,38 @@ public class CellsparsePane extends GridPane {
         add(labelInfo, 0, row, GridPane.REMAINING, 1);
     }
 
-    /**
-     * Handle a change in task state.
-     * 
-     * @param task
-     * @param newValue
-     */
-    private void taskStateChange(Task<?> task, Worker.State newValue) {
-        switch (newValue) {
-            case SUCCEEDED:
-                logger.debug("Task completed successfully");
-                command.getCurrentTasks().remove(task);
-                break;
-            case CANCELLED:
-                logger.info("Task cancelled");
-                command.getCurrentTasks().remove(task);
-                if (task.getException() != null) {
-                    logger.warn("Task failed: {}", task, task.getException());
-                    command.updateInfoTextWithError("Task cancelled with exception " + task.getException() +
-                            "\nSee log for details.");
-                } else {
-                    command.updateInfoText("Task cancelled");
-                }
-                break;
-            case FAILED:
-                command.getCurrentTasks().remove(task);
-                if (task.getException() != null) {
-                    logger.warn("Task failed: {}", task, task.getException());
-                    command.updateInfoTextWithError("Task failed with exception " + task.getException() +
-                            "\nSee log for details.");
-                } else {
-                    command.updateInfoTextWithError("Task failed!");
-                }
-                break;
-            case RUNNING:
-                logger.trace("Task running");
-                break;
-            case SCHEDULED:
-                logger.trace("Task scheduled");
-                break;
-            default:
-                logger.debug("Task state changed to {}", newValue);
-        }
+    private void addProgressPane(int row) {
+        ProgressBar progressBar = new ProgressBar();
+        progressBar.progressProperty().bind(command.getProgressProperty());
+        progressBar.visibleProperty().bind(command.getIsTaskRunning());
+        progressBar.setMaxWidth(Double.MAX_VALUE);
+        GridPane.setFillWidth(progressBar, true);
+
+        var btnCancel = new Button("Cancel");
+        btnCancel.setTooltip(new Tooltip("Cancel processing"));
+        btnCancel.setOnAction(e -> {
+            command.cancelAllTasks();
+        });
+        btnCancel.visibleProperty().bind(command.getIsTaskRunning());
+        var paneProgress = GridPaneUtils.createRowGridControls(progressBar, btnCancel);
+        add(paneProgress, 0, row, GridPane.REMAINING, 1);
     }
 
-    /**
-     * Submit a task.
-     * 
-     * @param task the task to submit
-     * @return a Future representing pending completion of the task
-     */
-    private Future<?> submitTask(Task<?> task) {
-        task.setOnFailed(event -> {
-            Platform.runLater(() -> {
-                Dialogs.showErrorMessage("Connection failed",
-                        "Please check that the samapi server (v0.4 and above) is running and the URL is correct.");
-            });
-        });
-        command.getCurrentTasks().add(task);
-        task.stateProperty().addListener((observable, oldValue, newValue) -> taskStateChange(task, newValue));
-        return command.getPool().submit(task);
+    private String resolveEndpointURL(String endPoint) {
+        String url = null;
+        try {
+            url = new URI(command.getServerURLProperty().get())
+                    .resolve(endPoint)
+                    .normalize()
+                    .toURL()
+                    .toString();
+        } catch (URISyntaxException | MalformedURLException e) {
+            logger.warn("{} is not a valid URL.", command.getServerURLProperty().get());
+        }
+        if (url != null && !url.endsWith("/")) {
+            url += "/";
+        }
+        return url;
     }
 
     /**
@@ -546,71 +516,27 @@ public class CellsparsePane extends GridPane {
         CellsparseModel model = command.getModelProperty().get();
         if (model == null) {
             Dialogs.showErrorMessage("submitTrainTask", "No model selected!");
+            return;
         }
-        String url = null;
-        try {
-            url = new URI(command.getServerURLProperty().get())
-                    .resolve(model.getEndpoint())
-                    .normalize()
-                    .toURL()
-                    .toString();
-        } catch (URISyntaxException | MalformedURLException e) {
-            logger.warn("{} is not a valid URL.", command.getServerURLProperty().get());
-        }
+        final String url = resolveEndpointURL(model.getEndpoint());
         if (url == null)
             return;
-        if (!url.endsWith("/")) {
-            url += "/";
-        }
-        final double downsample = selectedResolution.get().getPixelCalibration().getAveragedPixelSize().doubleValue();
-        final PixelCalibration resolution = qupath.getViewer().getServer().getPixelCalibration()
-                .createScaledInstance(downsample, downsample);
-        final int tw = tileWidthProperty.get();
-        final int th = tileHeightProperty.get();
-        final int pad = padProperty.get();
-        final ColorTransform[] colorTransforms = IntStream.range(0, qupath.getViewer().getServer().nChannels())
-                .mapToObj(c -> ColorTransforms.createChannelExtractor(c))
-                .toArray(ColorTransform[]::new).clone();
-        final ImageDataOp op = ImageOps.buildImageDataOp(colorTransforms);
-        final ImageDataServer<BufferedImage> opServer = ImageOps.buildServer(qupath.getViewer().getImageData(), op,
-                resolution, tw - pad * 2, th - pad * 2);
-        final PathObjectHierarchy hierarchy = qupath.getViewer().getImageData().getHierarchy();
-        final Collection<PathObject> selectedAnnotations = hierarchy.getSelectionModel().getSelectedObjects();
-        final RegionFilter regionFilter = selectedRegionFilter.get();
-        final ROI union = regionFilter == SelectedObjectsRegionFilter.EVERYWHERE || selectedAnnotations.isEmpty()
-                ? null
-                : RoiTools.union(selectedAnnotations.stream().map(it -> it.getROI()).collect(Collectors.toList()));
+        TileProvider tileProvider = TileProvider.builder(qupath.getViewer())
+                .pixelCalibration(selectedResolution.get().getPixelCalibration())
+                .tileWidth(tileWidthProperty.get())
+                .tileHeight(tileHeightProperty.get())
+                .pad(padProperty.get())
+                .regionFilter(selectedRegionFilter.get())
+                .build();
 
-        // Get the RegionRequest with the downsample (and union)
-        RegionRequest regionRequest;
-        if (union == null) {
-            regionRequest = RegionRequest.createInstance(opServer, downsample);
-        } else {
-            regionRequest = RegionRequest.createInstance(
-                    opServer.getPath(),
-                    downsample,
-                    union);
+        Collection<TileRequest> tiles = tileProvider.getTiles();
+
+        final int numTiles = tiles.size();
+        if (!Dialogs.showConfirmDialog("Run training",
+                "This will run training on " + numTiles + " tiles. Continue?")) {
+            return;
         }
-        Collection<TileRequest> tiles = qupath.getViewer().getServer().getTileRequestManager()
-                .getTileRequests(regionRequest);
-        tiles = tiles.stream()
-                .filter(t -> union == null || union.getGeometry()
-                        .intersects(GeometryTools.createRectangle(t.getImageX(), t.getImageY(),
-                                t.getImageWidth(), t.getImageHeight())))
-                .collect(Collectors.toList());
-        List<Future<?>> futures = new ArrayList<>();
-        List<RegionRequest> regionRequests = new ArrayList<>();
-        for (TileRequest tile : tiles) {
-            var request = tile.getRegionRequest();
-            var server = qupath.getViewer().getServer();
-            int x1 = (int) Math.max(0, Math.round(request.getX() - downsample * pad));
-            int y1 = (int) Math.max(0, Math.round(request.getY() - downsample * pad));
-            int x2 = (int) Math.min(server.getWidth(), Math.round(request.getMaxX() + downsample * pad));
-            int y2 = (int) Math.min(server.getHeight(), Math.round(request.getMaxY() + downsample * pad));
-            RegionRequest requestPadded = RegionRequest.createInstance(server.getPath(), downsample, x1, y1, x2 - x1,
-                    y2 - y1, request.getZ(), request.getT());
-            regionRequests.add(requestPadded);
-        }
+        Collection<RegionRequest> regionRequests = tileProvider.getRegionRequestsPadded();
 
         CellsparseTrainTask task = CellsparseTrainTask.builder(qupath.getViewer())
                 .endpointURL(url.toString())
@@ -621,19 +547,17 @@ public class CellsparsePane extends GridPane {
             command.updateInfoText("Training is done");
         });
 
-        futures.add(submitTask(task));
+        Future<?> future = CellsparseTaskUtils.submitTask(command, task);
 
         // Sychronize the results
-        for (Future<?> future : futures) {
-            try {
-                future.get();
-            } catch (CancellationException e) {
-                logger.warn("Task is cancelled", e);
-            } catch (ExecutionException e) {
-                logger.warn("Error while waiting for task to complete", e);
-            } catch (InterruptedException e) {
-                logger.warn("Task is interrupted", e);
-            }
+        try {
+            future.get();
+        } catch (CancellationException e) {
+            logger.warn("Task is cancelled", e);
+        } catch (ExecutionException e) {
+            logger.warn("Error while waiting for task to complete", e);
+        } catch (InterruptedException e) {
+            logger.warn("Task is interrupted", e);
         }
     }
 
@@ -646,112 +570,60 @@ public class CellsparsePane extends GridPane {
         CellsparseModel model = command.getModelProperty().get();
         if (model == null) {
             Dialogs.showErrorMessage("submitInferTask", "No model selected!");
+            return;
         }
-        String url = null;
-        try {
-            url = new URI(command.getServerURLProperty().get())
-                    .resolve(model.getEndpoint())
-                    .normalize()
-                    .toURL()
-                    .toString();
-        } catch (URISyntaxException | MalformedURLException e) {
-            logger.warn("{} is not a valid URL.", command.getServerURLProperty().get());
-        }
+        final String url = resolveEndpointURL(model.getEndpoint());
         if (url == null)
             return;
-        if (!url.endsWith("/")) {
-            url += "/";
-        }
-        final double downsample = selectedResolution.get().getPixelCalibration().getAveragedPixelSize().doubleValue();
-        final PixelCalibration resolution = qupath.getViewer().getServer().getPixelCalibration()
-                .createScaledInstance(downsample, downsample);
-        final int tw = tileWidthProperty.get();
-        final int th = tileHeightProperty.get();
-        final int pad = padProperty.get();
-        final ColorTransform[] colorTransforms = IntStream.range(0, qupath.getViewer().getServer().nChannels())
-                .mapToObj(c -> ColorTransforms.createChannelExtractor(c))
-                .toArray(ColorTransform[]::new).clone();
-        final ImageDataOp op = ImageOps.buildImageDataOp(colorTransforms);
-        final ImageDataServer<BufferedImage> opServer = ImageOps.buildServer(qupath.getViewer().getImageData(), op,
-                resolution, tw - pad * 2, th - pad * 2);
-        final PathObjectHierarchy hierarchy = qupath.getViewer().getImageData().getHierarchy();
-        final Collection<PathObject> selectedAnnotations = hierarchy.getSelectionModel().getSelectedObjects();
-        final List<PathObject> toRomove = hierarchy.getAnnotationObjects().stream()
-                .filter(pathObject -> pathObject.getPathClass() == null).toList();
-        final RegionFilter regionFilter = selectedRegionFilter.get();
-        final ROI union = regionFilter == SelectedObjectsRegionFilter.EVERYWHERE || selectedAnnotations.isEmpty()
-                ? null
-                : RoiTools.union(selectedAnnotations.stream().map(it -> it.getROI()).collect(Collectors.toList()));
 
-        // Get the RegionRequest with the downsample (and union)
-        RegionRequest regionRequest;
-        if (union == null) {
-            regionRequest = RegionRequest.createInstance(opServer, downsample);
-        } else {
-            regionRequest = RegionRequest.createInstance(
-                    opServer.getPath(),
-                    downsample,
-                    union);
+        final TileProvider tileProvider = TileProvider.builder(qupath.getViewer())
+                .pixelCalibration(selectedResolution.get().getPixelCalibration())
+                .tileWidth(tileWidthProperty.get())
+                .tileHeight(tileHeightProperty.get())
+                .pad(padProperty.get())
+                .regionFilter(selectedRegionFilter.get())
+                .build();
+        final Collection<TileRequest> tiles = tileProvider.getTiles();
+        if (!Dialogs.showConfirmDialog("Run inference",
+                "This will run inference on " + tiles.size() + " tiles. Continue?")) {
+            return;
         }
-        Collection<TileRequest> tiles = qupath.getViewer().getServer().getTileRequestManager()
-                .getTileRequests(regionRequest);
-        tiles = tiles.stream()
-                .filter(t -> union == null || union.getGeometry()
-                        .intersects(GeometryTools.createRectangle(t.getImageX(), t.getImageY(),
-                                t.getImageWidth(), t.getImageHeight())))
-                .collect(Collectors.toList());
-        final List<PathObject> detections = Collections.synchronizedList(new ArrayList<>());
-        List<Future<?>> futures = new ArrayList<>();
-        for (TileRequest tile : tiles) {
-            var request = tile.getRegionRequest();
-            var server = qupath.getViewer().getServer();
-            int x1 = (int) Math.max(0, Math.round(request.getX() - downsample * pad));
-            int y1 = (int) Math.max(0, Math.round(request.getY() - downsample * pad));
-            int x2 = (int) Math.min(server.getWidth(), Math.round(request.getMaxX() + downsample * pad));
-            int y2 = (int) Math.min(server.getHeight(), Math.round(request.getMaxY() + downsample * pad));
-            RegionRequest requestPadded = RegionRequest.createInstance(server.getPath(), downsample, x1, y1, x2 - x1,
-                    y2 - y1, request.getZ(), request.getT());
+        command.getProgressProperty().set(0);
 
-            CellsparseInferTask task = CellsparseInferTask.builder(qupath.getViewer())
-                    .endpointURL(url.toString())
-                    .model(model)
-                    .regionRequest(requestPadded)
-                    .build();
-            task.setOnSucceeded(event -> {
-                final List<PathObject> detected = task.getValue();
-                if (detected != null) {
-                    if (!detected.isEmpty()) {
-                        detections.addAll(detected);
-                    } else {
-                        logger.info("No objects detected");
-                    }
-                } else {
-                    logger.info("No objects detected");
-                }
+        Task<List<PathObject>> task = CellsparseInferTask.builder(qupath.getViewer(), command)
+                .endpointURL(url.toString())
+                .model(model)
+                .tileProvider(tileProvider)
+                .build();
+
+        task.setOnSucceeded(event -> {
+            Platform.runLater(() -> {
+                finalize(qupath.getViewer().getHierarchy(),
+                        tileProvider.getPathObjectsToRemove(),
+                        task.getValue(),
+                        tileProvider.getUnion(),
+                        (SelectedObjectsRegionFilter) tileProvider.getRegionFilter(),
+                        tileProvider.getSelectedAnnotations());
+                command.getProgressProperty().set(1);
+                command.updateInfoText("Inference is done");
             });
-
-            futures.add(submitTask(task));
-        }
-
-        // Sychronize the results
-        for (Future<?> future : futures) {
-            try {
-                future.get();
-            } catch (CancellationException e) {
-                logger.warn("Task is cancelled", e);
-            } catch (ExecutionException e) {
-                logger.warn("Error while waiting for task to complete", e);
-            } catch (InterruptedException e) {
-                logger.warn("Task is interrupted", e);
-            }
-        }
-
-        Platform.runLater(() -> {
-            finalize(hierarchy, toRomove, detections, union,
-                    (SelectedObjectsRegionFilter) regionFilter,
-                    selectedAnnotations);
         });
 
+        task.setOnFailed(event -> {
+            Throwable ex = task.getException();
+            command.getProgressProperty().set(1);
+            command.updateInfoText("Task failed: " + ex.getMessage() + "\n"
+                    + "Please check that the samapi server (v0.4 and above) is running and the URL is correct.");
+            command.cancelAllTasks();
+        });
+
+        task.setOnCancelled(event -> {
+            command.getProgressProperty().set(1);
+            command.updateInfoText("Task is cancelled");
+            command.cancelAllTasks();
+        });
+
+        new Thread(task).start();
     }
 
     /**
@@ -811,21 +683,9 @@ public class CellsparsePane extends GridPane {
             logger.debug("Cancel reset model");
             return;
         }
-        String url = null;
-        try {
-            url = new URI(command.getServerURLProperty().get())
-                    .resolve(model.getEndpoint() + "/reset")
-                    .normalize()
-                    .toURL()
-                    .toString();
-        } catch (URISyntaxException | MalformedURLException e) {
-            logger.warn("{} is not a valid URL.", command.getServerURLProperty().get());
-        }
+        final String url = resolveEndpointURL(model.getEndpoint() + "/reset");
         if (url == null)
             return;
-        if (!url.endsWith("/")) {
-            url += "/";
-        }
         CellsparseResetTask task = CellsparseResetTask.builder()
                 .endpointURL(url.toString())
                 .model(model)
@@ -833,7 +693,18 @@ public class CellsparsePane extends GridPane {
         task.setOnSucceeded(event -> {
             command.updateInfoText("Model is reset.");
         });
-        submitTask(task);
+        task.setOnFailed(event -> {
+            Platform.runLater(() -> {
+                Dialogs.showErrorMessage("Connection failed",
+                        "Please check that the samapi server (v0.4 and above) is running and the URL is correct.");
+            });
+        });
+        task.setOnFailed(event -> {
+            Throwable ex = task.getException();
+            command.updateInfoText("Task failed: " + ex.getMessage() + "\n"
+                    + "Please check that the samapi server (v0.4 and above) is running and the URL is correct.");
+        });
+        CellsparseTaskUtils.submitTask(command, task);
     }
 
     /**

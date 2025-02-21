@@ -1,83 +1,148 @@
 package org.elephant.cellsparse.tasks;
 
-import java.awt.image.BufferedImage;
-import java.io.IOException;
-import java.lang.reflect.Type;
-import java.net.HttpURLConnection;
-import java.net.http.HttpResponse;
+import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
-import java.util.function.Function;
-
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicInteger;
+import org.elephant.cellsparse.CellsparseCommand;
+import org.elephant.cellsparse.lib.gui.viewer.TileProvider;
 import org.elephant.cellsparse.models.CellsparseModel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.google.gson.Gson;
-
+import javafx.application.Platform;
 import qupath.lib.gui.viewer.QuPathViewer;
-import qupath.lib.images.ImageData;
-import qupath.lib.io.GsonTools;
+import qupath.lib.images.servers.TileRequest;
 import qupath.lib.objects.PathObject;
-import qupath.lib.objects.PathObjects;
-import qupath.lib.objects.PathROIObject;
 import qupath.lib.regions.RegionRequest;
-import qupath.lib.roi.interfaces.ROI;
 
-public class CellsparseInferTask extends CellsparseTask {
+public class CellsparseInferTask extends CellsparseTask<List<PathObject>> {
 
     private static final Logger logger = LoggerFactory.getLogger(CellsparseInferTask.class);
 
-    private final ImageData<BufferedImage> imageData;
+    private final CellsparseCommand command;
+    private final QuPathViewer viewer;
     private final String endpointURL;
     private final CellsparseModel model;
-    private final RegionRequest regionRequest;
-    private final Function<ROI, PathObject> creatorFun;
+    private final Collection<TileRequest> tiles;
+    private final double downsample;
+    private final int pad;
+    private final int maxThreads;
 
     public CellsparseInferTask(Builder builder) {
-        QuPathViewer viewer = builder.viewer;
-        Objects.requireNonNull(builder, "Viewer must not be null!");
-
-        this.imageData = viewer.getImageData();
+        this.viewer = builder.viewer;
+        Objects.requireNonNull(viewer, "Viewer must not be null!");
+        this.command = builder.command;
         this.endpointURL = builder.endpointURL;
         this.model = builder.model;
-        if (builder.regionRequest == null) {
-            this.regionRequest = RegionRequest.createInstance(imageData.getServer());
-        } else {
-            this.regionRequest = builder.regionRequest;
-        }
-        this.creatorFun = builder.creatorFun;
+        this.model.getParameterList();
+        this.maxThreads = builder.maxThreads;
+        this.tiles = builder.tileProvider.getTiles();
+        this.downsample = builder.tileProvider.getDownsample();
+        this.pad = builder.tileProvider.getPad();
     }
 
     @Override
     protected List<PathObject> call() throws Exception {
-        updateProgress(0, 1);
-        final BufferedImage image = readRegionFromServer(imageData.getServer(), regionRequest);
-        final String strImage = base64Encode(image);
+        final List<PathObject> detections = Collections.synchronizedList(new ArrayList<>());
+        List<Future<?>> futures = new ArrayList<>();
+        int count = 0;
+        AtomicInteger finishedCount = new AtomicInteger(0);
+        final int numTiles = tiles.size();
+        for (TileRequest tile : tiles) {
+            logger.debug("Processing index {} / {}", ++count, numTiles);
+            var request = tile.getRegionRequest();
+            var server = viewer.getServer();
+            int x1 = (int) Math.max(0, Math.round(request.getX() - downsample * pad));
+            int y1 = (int) Math.max(0, Math.round(request.getY() - downsample * pad));
+            int x2 = (int) Math.min(server.getWidth(), Math.round(request.getMaxX() + downsample * pad));
+            int y2 = (int) Math.min(server.getHeight(), Math.round(request.getMaxY() + downsample * pad));
+            RegionRequest requestPadded = RegionRequest.createInstance(server.getPath(), downsample, x1, y1,
+                    x2 - x1,
+                    y2 - y1, request.getZ(), request.getT());
 
-        final Gson gson = GsonTools.getInstance();
-        final String bodyJson = model.getRequestBodyStringInfer(strImage);
-        final Type type = new com.google.gson.reflect.TypeToken<List<PathObject>>() {
-        }.getType();
-        try {
-            HttpResponse<String> response = CellsparseInferTask.sendRequest(endpointURL, bodyJson);
-            if (response.statusCode() == HttpURLConnection.HTTP_OK) {
-                List<PathObject> pathObjects = gson.fromJson(response.body(), type);
-                for (PathObject pathObject : pathObjects) {
-                    ((PathROIObject) pathObject).setROI(scaleAndTranslatePathObject(pathObject, regionRequest));
+            CellsparseInferSubTask task = CellsparseInferSubTask.builder(viewer)
+                    .endpointURL(endpointURL)
+                    .model(model)
+                    .regionRequest(requestPadded)
+                    .build();
+            task.setOnSucceeded(event -> {
+                final List<PathObject> detected = task.getValue();
+                if (detected != null) {
+                    if (!detected.isEmpty()) {
+                        detections.addAll(detected);
+                    } else {
+                        logger.info("No objects detected");
+                    }
+                } else {
+                    logger.info("No objects detected");
                 }
-                return pathObjects;
-            } else {
-                logger.warn(String.format("HTTP error: %d\n%s", response.statusCode(), response.body()));
+            });
+            task.setOnFailed(event -> {
+                Throwable ex = task.getException();
+                command.updateInfoText("Task failed: " + ex.getMessage() + "\n"
+                        + "Please check that the samapi server (v0.4 and above) is running and the URL is correct.");
+            });
+            task.setOnCancelled(event -> {
+                if (!isCancelled()) {
+                    cancel();
+                }
+                command.updateInfoText("Task is cancelled");
+            });
+
+            futures.add(CellsparseTaskUtils.submitTask(command, task));
+
+            if (futures.size() >= maxThreads) {
+                try {
+                    futures.get(0).get();
+                    futures.remove(0);
+                    Platform.runLater(() -> {
+                        command.getProgressProperty()
+                                .set((double) finishedCount.getAndIncrement() / numTiles);
+                        final String progressString = "Processing " + finishedCount.get() + " / " + numTiles;
+                        command.updateInfoText(progressString);
+                        logger.debug(progressString);
+                    });
+                } catch (CancellationException e) {
+                    logger.debug("Task is cancelled", e);
+                    return null;
+                } catch (ExecutionException e) {
+                    logger.warn("Error while waiting for task to complete", e);
+                    return null;
+                } catch (InterruptedException e) {
+                    logger.debug("Task is interrupted", e);
+                    return null;
+                }
+            }
+        }
+        for (Future<?> future : futures) {
+            try {
+                future.get();
+                Platform.runLater(() -> {
+                    command.getProgressProperty()
+                            .set((double) finishedCount.getAndIncrement() / numTiles);
+                    final String progressString = "Processing " + finishedCount.get() + " / " + numTiles;
+                    command.updateInfoText(progressString);
+                    logger.debug(progressString);
+                });
+            } catch (CancellationException e) {
+                logger.warn("Task is cancelled", e);
+                return Collections.emptyList();
+            } catch (ExecutionException e) {
+                logger.warn("Error while waiting for task to complete", e);
+                return Collections.emptyList();
+            } catch (InterruptedException e) {
+                logger.warn("Task is interrupted", e);
                 return Collections.emptyList();
             }
-        } catch (IOException | InterruptedException e) {
-            logger.warn("Interrupted while sending request to server", e);
-            return Collections.emptyList();
-        } finally {
-            updateProgress(1, 1);
         }
+
+        return detections;
     }
 
     /**
@@ -87,24 +152,27 @@ public class CellsparseInferTask extends CellsparseTask {
      *               the viewer containing the image to be processed
      * @return the builder
      */
-    public static Builder builder(QuPathViewer viewer) {
-        return new Builder(viewer);
+    public static Builder builder(QuPathViewer viewer, CellsparseCommand command) {
+        return new Builder(viewer, command);
     }
 
     /**
      * Builder for a CellsparseInferTask class.
      */
     public static class Builder {
+        private static final int DEFAULT_MAX_THREADS = 4;
 
-        private QuPathViewer viewer;
+        private final QuPathViewer viewer;
+        private final CellsparseCommand command;
 
         private String endpointURL;
         private CellsparseModel model;
-        private RegionRequest regionRequest;
-        private Function<ROI, PathObject> creatorFun;
+        private int maxThreads = DEFAULT_MAX_THREADS;
+        private TileProvider tileProvider;
 
-        private Builder(QuPathViewer viewer) {
+        private Builder(QuPathViewer viewer, CellsparseCommand command) {
             this.viewer = viewer;
+            this.command = command;
         }
 
         /**
@@ -129,26 +197,13 @@ public class CellsparseInferTask extends CellsparseTask {
             return this;
         }
 
-        /**
-         * Specify the region request (required).
-         * 
-         * @param regionRequest
-         * @return this builder
-         */
-        public Builder regionRequest(final RegionRequest regionRequest) {
-            this.regionRequest = regionRequest;
+        public Builder maxThreads(int maxThreads) {
+            this.maxThreads = maxThreads;
             return this;
         }
 
-        /**
-         * Create annotations rather than detections (the default).
-         * If cell expansion is not zero, the nucleus will be included as a child
-         * object.
-         * 
-         * @return this builder
-         */
-        public Builder createAnnotations() {
-            this.creatorFun = r -> PathObjects.createAnnotationObject(r);
+        public Builder tileProvider(TileProvider tileProvider) {
+            this.tileProvider = tileProvider;
             return this;
         }
 

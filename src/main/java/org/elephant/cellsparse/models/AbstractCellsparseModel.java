@@ -8,7 +8,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 
-import org.elephant.cellsparse.tasks.CellsparseInferTask;
+import org.elephant.cellsparse.tasks.CellsparseInferSubTask;
 import org.elephant.cellsparse.tasks.CellsparseResetTask;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -229,7 +229,7 @@ public abstract class AbstractCellsparseModel<T extends AbstractCellsparseModel.
         if (!url.endsWith("/")) {
             url += "/";
         }
-        CellsparseInferTask task = CellsparseInferTask.builder(viewer)
+        CellsparseInferSubTask task = CellsparseInferSubTask.builder(viewer)
                 .endpointURL(url)
                 .model(this)
                 .regionRequest(regionRequest)
@@ -239,7 +239,7 @@ public abstract class AbstractCellsparseModel<T extends AbstractCellsparseModel.
             if (detected != null && !task.getValue().isEmpty()) {
                 if (!detected.isEmpty()) {
                     Platform.runLater(() -> {
-                        PathObjectHierarchy hierarchy = viewer.getImageData().getHierarchy();
+                        PathObjectHierarchy hierarchy = viewer.getHierarchy();
                         List<PathObject> toRomove = hierarchy.getAnnotationObjects().stream()
                                 .filter(pathObject -> pathObject.getPathClass() == null).toList();
                         hierarchy.removeObjects(toRomove, false);

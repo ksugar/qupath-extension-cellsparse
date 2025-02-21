@@ -1,6 +1,8 @@
 package org.elephant.cellsparse;
 
 import java.awt.image.BufferedImage;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -231,6 +233,15 @@ public class CellsparseCommand implements Runnable {
             return;
         infoTextProperty.set(message);
         infoTextErrorTimestampProperty.set(0);
+    }
+
+    public void cancelAllTasks() {
+        List<Task<?>> tasksToCancel = new ArrayList<>(getCurrentTasks());
+        tasksToCancel.forEach(task -> {
+            if (task != null)
+                task.cancel();
+            getCurrentTasks().remove(task);
+        });
     }
 
 }

@@ -8,7 +8,6 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.util.Base64;
-import java.util.List;
 import javax.imageio.ImageIO;
 
 import javafx.concurrent.Task;
@@ -18,7 +17,7 @@ import qupath.lib.objects.PathObject;
 import qupath.lib.regions.RegionRequest;
 import qupath.lib.roi.interfaces.ROI;
 
-public abstract class CellsparseTask extends Task<List<PathObject>> {
+public abstract class CellsparseTask<T> extends Task<T> {
 
     public static String base64Encode(final BufferedImage bufferedImage) {
         String base64Image = null;
@@ -58,7 +57,7 @@ public abstract class CellsparseTask extends Task<List<PathObject>> {
     }
 
     @Override
-    protected abstract List<PathObject> call() throws Exception;
+    protected abstract T call() throws Exception;
 
     public static ROI scaleAndTranslatePathObject(final PathObject pathObject, final RegionRequest regionRequest) {
         final double scale = regionRequest.getDownsample();

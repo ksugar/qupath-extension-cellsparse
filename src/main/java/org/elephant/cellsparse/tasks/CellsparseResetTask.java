@@ -3,14 +3,11 @@ package org.elephant.cellsparse.tasks;
 import java.io.IOException;
 import java.net.HttpURLConnection;
 import java.net.http.HttpResponse;
-import java.util.List;
 import org.elephant.cellsparse.models.CellsparseModel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import qupath.lib.objects.PathObject;
-
-public class CellsparseResetTask extends CellsparseTask {
+public class CellsparseResetTask extends CellsparseTask<Boolean> {
 
     private static final Logger logger = LoggerFactory.getLogger(CellsparseResetTask.class);
 
@@ -23,19 +20,21 @@ public class CellsparseResetTask extends CellsparseTask {
     }
 
     @Override
-    protected List<PathObject> call() throws Exception {
+    protected Boolean call() throws Exception {
         final String bodyJson = model.getRequestBodyStringReset();
         try {
             HttpResponse<String> response = CellsparseResetTask.sendRequest(endpointURL, bodyJson);
             if (response.statusCode() == HttpURLConnection.HTTP_OK) {
-                return null;
+                return true;
             } else {
-                logger.warn(String.format("HTTP error: %d\n%s", response.statusCode(), response.body()));
-                return null;
+                final String message = String.format("HTTP error: %d\n%s", response.statusCode(), response.body());
+                logger.warn(message);
+                throw new IOException(message);
             }
         } catch (IOException | InterruptedException e) {
-            logger.warn("Interrupted while sending request to server", e);
-            return null;
+            final String message = "Interrupted while sending request to server";
+            logger.debug(message, e);
+            throw new IOException(message, e);
         }
     }
 

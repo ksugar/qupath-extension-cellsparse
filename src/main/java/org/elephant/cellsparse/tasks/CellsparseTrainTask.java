@@ -2,19 +2,16 @@ package org.elephant.cellsparse.tasks;
 
 import java.awt.image.BufferedImage;
 import java.io.IOException;
-import java.lang.reflect.Type;
 import java.net.HttpURLConnection;
 import java.net.http.HttpResponse;
 import java.util.ArrayList;
-import java.util.Collections;
+import java.util.Collection;
 import java.util.List;
 import java.util.Objects;
 
 import org.elephant.cellsparse.models.CellsparseModel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
-import com.google.gson.Gson;
 
 import ij.ImagePlus;
 import ij.plugin.ImageCalculator;
@@ -23,18 +20,17 @@ import qupath.lib.gui.viewer.QuPathViewer;
 import qupath.lib.images.ImageData;
 import qupath.lib.images.servers.LabeledImageServer;
 import qupath.lib.images.servers.LabeledOffsetImageServer;
-import qupath.lib.objects.PathObject;
 import qupath.lib.objects.classes.PathClass;
 import qupath.lib.regions.RegionRequest;
 
-public class CellsparseTrainTask extends CellsparseTask {
+public class CellsparseTrainTask extends CellsparseTask<Boolean> {
 
     private static final Logger logger = LoggerFactory.getLogger(CellsparseTrainTask.class);
 
     private final ImageData<BufferedImage> imageData;
     private final String endpointURL;
     private final CellsparseModel model;
-    private final List<RegionRequest> regionRequests;
+    private final Collection<RegionRequest> regionRequests;
 
     public CellsparseTrainTask(Builder builder) {
         QuPathViewer viewer = builder.viewer;
@@ -52,11 +48,16 @@ public class CellsparseTrainTask extends CellsparseTask {
     }
 
     @Override
-    protected List<PathObject> call() throws Exception {
-        updateProgress(0, 1);
+    protected Boolean call() throws Exception {
+        updateProgress(0, regionRequests.size());
         List<String> strImages = new ArrayList<>();
         List<String> strLabels = new ArrayList<>();
+        int count = 0;
         for (RegionRequest regionRequest : regionRequests) {
+            if (isCancelled()) {
+                updateProgress(0, 0);
+                return false;
+            }
             final BufferedImage image = readRegionFromServer(imageData.getServer(), regionRequest);
             final String strImage = base64Encode(image);
             strImages.add(strImage);
@@ -75,22 +76,25 @@ public class CellsparseTrainTask extends CellsparseTask {
             final BufferedImage lblImage = imageCalculator.run("Max", bgImp, fgImp).getBufferedImage();
             final String strLabel = base64Encode(lblImage);
             strLabels.add(strLabel);
+            updateProgress(++count, regionRequests.size());
         }
         final String bodyJson = model.getRequestBodyStringTrain(strImages, strLabels);
         try {
             HttpResponse<String> response = CellsparseTrainTask.sendRequest(endpointURL, bodyJson);
             if (response.statusCode() == HttpURLConnection.HTTP_OK) {
                 logger.info("Training have been done successfully");
-                return Collections.emptyList();
+                return true;
             } else {
-                logger.warn(String.format("HTTP error: %d\n%s", response.statusCode(), response.body()));
-                return Collections.emptyList();
+                final String message = String.format("HTTP error: %d\n%s", response.statusCode(), response.body());
+                logger.warn(message);
+                throw new IOException(message);
             }
         } catch (IOException | InterruptedException e) {
-            logger.warn("Interrupted while sending request to server", e);
-            return Collections.emptyList();
+            final String message = "Interrupted while sending request to server";
+            logger.debug(message, e);
+            throw new IOException(message, e);
         } finally {
-            updateProgress(1, 1);
+            updateProgress(regionRequests.size(), regionRequests.size());
         }
     }
 
@@ -114,7 +118,7 @@ public class CellsparseTrainTask extends CellsparseTask {
 
         private String endpointURL;
         private CellsparseModel model;
-        private List<RegionRequest> regionRequests;
+        private Collection<RegionRequest> regionRequests;
 
         private Builder(QuPathViewer viewer) {
             this.viewer = viewer;
@@ -145,10 +149,10 @@ public class CellsparseTrainTask extends CellsparseTask {
         /**
          * Specify the region request (required).
          * 
-         * @param List<regionRequest>
+         * @param Collection<RegionRequest>
          * @return this builder
          */
-        public Builder regionRequests(final List<RegionRequest> regionRequests) {
+        public Builder regionRequests(final Collection<RegionRequest> regionRequests) {
             this.regionRequests = regionRequests;
             return this;
         }
