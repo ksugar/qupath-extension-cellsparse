@@ -652,7 +652,7 @@ public class CellsparsePane extends GridPane {
                 .collect(Collectors.toList());
 
         hierarchy.addObjects(finalDetections);
-        if (regionFilter == SelectedObjectsRegionFilter.SELECTED_OBJECTS) {
+        if (regionFilter == SelectedObjectsRegionFilter.SELECTED_OBJECTS && union != null) {
             hierarchy.removeObjects(selectedAnnotations, false);
             Collection<PathObject> toKeep = hierarchy.getObjectsForROI(null, union);
             hierarchy.removeObjects(finalDetections.stream()
