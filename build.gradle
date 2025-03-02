@@ -43,24 +43,20 @@ dependencies {
 
     // Main QuPath user interface jar.
     // Automatically includes other QuPath jars as subdependencies.
-    shadow "io.github.qupath:qupath-gui-fx:${qupathVersion}"
+    implementation "io.github.qupath:qupath-gui-fx:${qupathVersion}"
     
     // For logging - the version comes from QuPath's version catalog at
     // https://github.com/qupath/qupath/blob/main/gradle/libs.versions.toml
     // See https://docs.gradle.org/current/userguide/platforms.html
-    shadow libs.slf4j
-
-    // If you aren't using Groovy, this can be removed
-    shadow libs.bundles.groovy
-
-    implementation "io.github.qupath:qupath-gui-fx:${qupathVersion}"
+    implementation libs.slf4j
+    
     implementation "io.github.qupath:qupath-extension-processing:${qupathVersion}"
     implementation "io.github.qupath:qupath-fxtras:${qupathFxtrasVersion}"
 
     testImplementation libs.junit
 
-    // Add additional dependencies here
-    shadow "io.github.qupath:qupath-extension-processing:${qupathVersion}"
+    // Tiff writer
+    shadow 'com.twelvemonkeys.imageio:imageio-tiff:3.12.0'
 }
 
 
@@ -75,11 +71,26 @@ jar {
     }
 }
 
+shadowJar {
+    archiveClassifier.set('')
+    configurations = [project.configurations.shadow]
+    mergeServiceFiles()
+    manifest {
+        attributes("Implementation-Title": project.name,
+                "Implementation-Version": archiveVersion,
+                "Automatic-Module-Name": moduleName)
+    }
+}
+
 /*
  * Copy the LICENSE file into the jar... if we have one (we should!)
  */
 processResources {
   from ("${projectDir}/LICENSE") {
+    into 'licenses/'
+  }
+  // Include all files from third-party-licenses folder
+  from ("${projectDir}/third-party-licenses") {
     into 'licenses/'
   }
 }
