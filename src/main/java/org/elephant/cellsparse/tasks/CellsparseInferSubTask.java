@@ -9,6 +9,8 @@ import java.util.List;
 import java.util.Objects;
 import java.util.function.Function;
 
+import org.elephant.cellsparse.lib.http.HttpUtils;
+import org.elephant.cellsparse.lib.http.MultipartBodyBuilder;
 import org.elephant.cellsparse.models.CellsparseModel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -54,14 +56,16 @@ public class CellsparseInferSubTask extends CellsparseTask<List<PathObject>> {
     protected List<PathObject> call() throws Exception {
         updateProgress(0, 1);
         final BufferedImage image = readRegionFromServer(imageData.getServer(), regionRequest);
-        final String strImage = base64Encode(image);
-
+        final MultipartBodyBuilder multipartBodyBuilder = HttpUtils
+                .createImageUploadMultipartBodyBuilder(List.of(image));
+        final String bodyJson = model.getRequestBodyStringInfer(null);
+        multipartBodyBuilder.addJsonField("json_data", bodyJson);
         final Gson gson = GsonTools.getInstance();
-        final String bodyJson = model.getRequestBodyStringInfer(strImage);
         final Type type = new com.google.gson.reflect.TypeToken<List<PathObject>>() {
         }.getType();
         try {
-            HttpResponse<String> response = CellsparseInferSubTask.sendRequest(endpointURL, bodyJson);
+            HttpResponse<String> response = CellsparseInferSubTask.sendMultipartRequest(endpointURL,
+                    multipartBodyBuilder);
             if (response.statusCode() == HttpURLConnection.HTTP_OK) {
                 List<PathObject> pathObjects = gson.fromJson(response.body(), type);
                 for (PathObject pathObject : pathObjects) {

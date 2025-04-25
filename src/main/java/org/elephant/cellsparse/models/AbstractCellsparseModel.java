@@ -326,7 +326,7 @@ public abstract class AbstractCellsparseModel<T extends AbstractCellsparseModel.
                 .b64imgs(b64imgs)
                 .b64lbls(b64lbls)
                 .train(true)
-                .eval(true)
+                .eval(false)
                 .trainpatch(((IntParameter) getParameter(getParameterList(), PARAM_KEY_TRAINPATCH)).getValue())
                 .batchsize(((IntParameter) getParameter(getParameterList(), PARAM_KEY_BATCHSIZE)).getValue())
                 .epochs(((IntParameter) getParameter(getParameterList(), PARAM_KEY_EPOCHS)).getValue())

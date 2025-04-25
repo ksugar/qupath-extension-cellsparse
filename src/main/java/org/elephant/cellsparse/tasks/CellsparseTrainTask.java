@@ -9,6 +9,8 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Objects;
 
+import org.elephant.cellsparse.lib.http.HttpUtils;
+import org.elephant.cellsparse.lib.http.MultipartBodyBuilder;
 import org.elephant.cellsparse.models.CellsparseModel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -50,8 +52,8 @@ public class CellsparseTrainTask extends CellsparseTask<Boolean> {
     @Override
     protected Boolean call() throws Exception {
         updateProgress(0, regionRequests.size());
-        List<String> strImages = new ArrayList<>();
-        List<String> strLabels = new ArrayList<>();
+        List<BufferedImage> imageList = new ArrayList<>();
+        List<BufferedImage> labelList = new ArrayList<>();
         int count = 0;
         for (RegionRequest regionRequest : regionRequests) {
             if (isCancelled()) {
@@ -59,8 +61,7 @@ public class CellsparseTrainTask extends CellsparseTask<Boolean> {
                 return false;
             }
             final BufferedImage image = readRegionFromServer(imageData.getServer(), regionRequest);
-            final String strImage = base64Encode(image);
-            strImages.add(strImage);
+            imageList.add(image);
             final LabeledImageServer bgLabelServer = new LabeledImageServer.Builder(imageData)
                     .backgroundLabel(0).addLabel("Background", 1).multichannelOutput(false).build();
             final BufferedImage bgImage = readRegionFromServer(bgLabelServer, regionRequest);
@@ -74,13 +75,16 @@ public class CellsparseTrainTask extends CellsparseTask<Boolean> {
             final ImagePlus bgImp = IJTools.convertToUncalibratedImagePlus("Background", bgImage);
             final ImagePlus fgImp = IJTools.convertToUncalibratedImagePlus("Foreground", fgImage);
             final BufferedImage lblImage = imageCalculator.run("Max", bgImp, fgImp).getBufferedImage();
-            final String strLabel = base64Encode(lblImage);
-            strLabels.add(strLabel);
+            labelList.add(lblImage);
             updateProgress(++count, regionRequests.size());
         }
-        final String bodyJson = model.getRequestBodyStringTrain(strImages, strLabels);
+        final MultipartBodyBuilder multipartBodyBuilder = HttpUtils.createImageUploadMultipartBodyBuilder(imageList,
+                labelList);
+        final String bodyJson = model.getRequestBodyStringTrain(null, null);
+        multipartBodyBuilder.addJsonField("json_data", bodyJson);
         try {
-            HttpResponse<String> response = CellsparseTrainTask.sendRequest(endpointURL, bodyJson);
+            HttpResponse<String> response = CellsparseInferSubTask.sendMultipartRequest(endpointURL,
+                    multipartBodyBuilder);
             if (response.statusCode() == HttpURLConnection.HTTP_OK) {
                 logger.info("Training have been done successfully");
                 return true;

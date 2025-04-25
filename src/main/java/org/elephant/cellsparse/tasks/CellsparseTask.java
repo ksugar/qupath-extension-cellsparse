@@ -10,6 +10,8 @@ import java.net.http.HttpResponse;
 import java.util.Base64;
 import javax.imageio.ImageIO;
 
+import org.elephant.cellsparse.lib.http.MultipartBodyBuilder;
+
 import javafx.concurrent.Task;
 import qupath.fx.dialogs.Dialogs;
 import qupath.lib.images.servers.ImageServer;
@@ -51,6 +53,18 @@ public abstract class CellsparseTask<T> extends Task<T> {
                 .header("accept", "application/json")
                 .header("Content-Type", "application/json; charset=utf-8")
                 .POST(HttpRequest.BodyPublishers.ofString(body))
+                .build();
+        HttpClient client = HttpClient.newHttpClient();
+        return client.send(request, HttpResponse.BodyHandlers.ofString());
+    }
+
+    static HttpResponse<String> sendMultipartRequest(String serverURL, MultipartBodyBuilder multipartBodyBuilder)
+            throws IOException, InterruptedException {
+        final HttpRequest request = HttpRequest.newBuilder()
+                .version(HttpClient.Version.HTTP_1_1)
+                .uri(URI.create(serverURL))
+                .header("Content-Type", "multipart/form-data; boundary=" + multipartBodyBuilder.getBoundary())
+                .POST(HttpRequest.BodyPublishers.ofByteArray(multipartBodyBuilder.build()))
                 .build();
         HttpClient client = HttpClient.newHttpClient();
         return client.send(request, HttpResponse.BodyHandlers.ofString());
