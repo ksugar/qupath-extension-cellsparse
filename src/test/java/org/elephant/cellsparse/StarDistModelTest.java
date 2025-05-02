@@ -16,7 +16,6 @@ public class StarDistModelTest {
                 .minarea(5.0)
                 .simplify_tol(0.5)
                 .pretrained("2D_paper_dsb2018")
-                .n_channels_in(1)
                 .build();
         System.out.println(model.getRequestBodyStringReset());
         System.out.println(model.getRequestBodyStringInfer(null));

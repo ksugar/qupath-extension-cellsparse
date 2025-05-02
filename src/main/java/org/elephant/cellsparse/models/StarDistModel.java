@@ -8,22 +8,16 @@ import org.elephant.cellsparse.models.AbstractCellsparseModel.CellsparseResetBod
 import org.elephant.cellsparse.models.AbstractCellsparseModel.CellsparseTrainBody;
 
 import qupath.lib.io.GsonTools;
-import qupath.lib.plugins.parameters.IntParameter;
 import qupath.lib.plugins.parameters.ParameterList;
 
 public class StarDistModel extends
         AbstractCellsparseModel<StarDistModel.StarDistTrainBody.Builder, StarDistModel.StarDistInferBody.Builder, StarDistModel.StarDistResetBody.Builder> {
-
-    private static final String PARAM_KEY_N_CHANNELS_IN = "n_channels_in";
-
-    private static final int DEFAULT_N_CHANNELS_IN = 1;
 
     public StarDistModel() {
     }
 
     public StarDistModel(final StarDistModelBuilder builder) {
         super(builder);
-        ((IntParameter) getParameter(getParameterList(), PARAM_KEY_N_CHANNELS_IN)).setValue(builder.n_channels_in);
     }
 
     @Override
@@ -34,15 +28,6 @@ public class StarDistModel extends
     @Override
     public String getEndpoint() {
         return "stardist";
-    }
-
-    @Override
-    ParameterList createParameterList() {
-        ParameterList params = super.createParameterList()
-                .addIntParameter(PARAM_KEY_N_CHANNELS_IN, "Number of channels", DEFAULT_N_CHANNELS_IN, null,
-                        "Number of channels of input image");
-
-        return params;
     }
 
     @Override
@@ -74,7 +59,6 @@ public class StarDistModel extends
     @Override
     public String getRequestBodyStringTrain(List<String> b64imgs, List<String> b64lbls) {
         StarDistTrainBody body = ((StarDistTrainBody.Builder) getDefaultTrainBodyBuilder(b64imgs, b64lbls))
-                .n_channels_in(((IntParameter) getParameter(getParameterList(), PARAM_KEY_N_CHANNELS_IN)).getValue())
                 .build();
         return GsonTools.getInstance().toJson(body);
     }
@@ -82,7 +66,6 @@ public class StarDistModel extends
     @Override
     public String getRequestBodyStringInfer(String b64img) {
         StarDistInferBody body = ((StarDistInferBody.Builder) getDefaultInferBodyBuilder().b64img(b64img))
-                .n_channels_in(((IntParameter) getParameter(getParameterList(), PARAM_KEY_N_CHANNELS_IN)).getValue())
                 .build();
         return GsonTools.getInstance().toJson(body);
     }
@@ -95,18 +78,12 @@ public class StarDistModel extends
 
     public static class StarDistModelBuilder
             extends AbstractCellsparseModelBuilder<StarDistModel, StarDistModelBuilder> {
-        private int n_channels_in;
 
         public StarDistModelBuilder() {
         }
 
         @Override
         protected StarDistModelBuilder self() {
-            return this;
-        }
-
-        public StarDistModelBuilder n_channels_in(final int n_channels_in) {
-            this.n_channels_in = n_channels_in;
             return this;
         }
 
@@ -122,23 +99,13 @@ public class StarDistModel extends
 
     public static class StarDistTrainBody extends CellsparseTrainBody {
 
-        @SuppressWarnings("unused")
-        private int n_channels_in;
-
         public StarDistTrainBody(Builder builder) {
             super(builder);
-            this.n_channels_in = builder.n_channels_in;
         }
 
         public static class Builder extends CellsparseTrainBody.Builder {
-            private int n_channels_in;
 
             public Builder() {
-            }
-
-            public Builder n_channels_in(final int n_channels_in) {
-                this.n_channels_in = n_channels_in;
-                return this;
             }
 
             public StarDistTrainBody build() {
@@ -154,23 +121,13 @@ public class StarDistModel extends
 
     public static class StarDistInferBody extends CellsparseInferBody {
 
-        @SuppressWarnings("unused")
-        private int n_channels_in;
-
         public StarDistInferBody(Builder builder) {
             super(builder);
-            this.n_channels_in = builder.n_channels_in;
         }
 
         public static class Builder extends CellsparseInferBody.Builder {
-            private int n_channels_in;
 
             public Builder() {
-            }
-
-            public Builder n_channels_in(final int n_channels_in) {
-                this.n_channels_in = n_channels_in;
-                return this;
             }
 
             public StarDistInferBody build() {
