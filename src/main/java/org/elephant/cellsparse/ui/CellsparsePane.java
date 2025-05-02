@@ -118,6 +118,8 @@ public class CellsparsePane extends GridPane {
         public void changed(ObservableValue<? extends ImageData<BufferedImage>> observable,
                 ImageData<BufferedImage> oldValue, ImageData<BufferedImage> newValue) {
             updateAvailableResolutions(newValue);
+            if (!comboResolutions.getItems().isEmpty() && selectedResolution.get() == null)
+                comboResolutions.getSelectionModel().clearAndSelect(resolutions.size() / 2);
         }
 
     };
@@ -182,6 +184,10 @@ public class CellsparsePane extends GridPane {
      */
     private void updateAvailableResolutions(ImageData<BufferedImage> imageData) {
         var selected = selectedResolution.get();
+        if (selected != null && selected.getPixelCalibration().hasPixelSizeMicrons() != imageData.getServer()
+                .getPixelCalibration().hasPixelSizeMicrons()) {
+            selected = null;
+        }
         if (imageData == null) {
             return;
         }
