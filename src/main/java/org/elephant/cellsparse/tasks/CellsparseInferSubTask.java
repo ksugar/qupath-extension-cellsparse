@@ -64,7 +64,7 @@ public class CellsparseInferSubTask extends CellsparseTask<List<PathObject>> {
         final Type type = new com.google.gson.reflect.TypeToken<List<PathObject>>() {
         }.getType();
         try {
-            HttpResponse<String> response = CellsparseInferSubTask.sendMultipartRequest(endpointURL,
+            HttpResponse<String> response = HttpUtils.sendMultipartRequest(endpointURL,
                     multipartBodyBuilder);
             if (response.statusCode() == HttpURLConnection.HTTP_OK) {
                 List<PathObject> pathObjects = gson.fromJson(response.body(), type);

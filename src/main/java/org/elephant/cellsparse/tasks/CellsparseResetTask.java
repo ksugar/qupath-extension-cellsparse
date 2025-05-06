@@ -3,6 +3,8 @@ package org.elephant.cellsparse.tasks;
 import java.io.IOException;
 import java.net.HttpURLConnection;
 import java.net.http.HttpResponse;
+
+import org.elephant.cellsparse.lib.http.HttpUtils;
 import org.elephant.cellsparse.models.CellsparseModel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -23,7 +25,7 @@ public class CellsparseResetTask extends CellsparseTask<Boolean> {
     protected Boolean call() throws Exception {
         final String bodyJson = model.getRequestBodyStringReset();
         try {
-            HttpResponse<String> response = CellsparseResetTask.sendRequest(endpointURL, bodyJson);
+            HttpResponse<String> response = HttpUtils.sendRequest(endpointURL, bodyJson);
             if (response.statusCode() == HttpURLConnection.HTTP_OK) {
                 return true;
             } else {

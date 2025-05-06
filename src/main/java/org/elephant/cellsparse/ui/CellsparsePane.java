@@ -544,27 +544,33 @@ public class CellsparsePane extends GridPane {
         }
         Collection<RegionRequest> regionRequests = tileProvider.getRegionRequestsPadded();
 
-        CellsparseTrainTask task = CellsparseTrainTask.builder(qupath.getViewer())
+        command.getProgressProperty().set(0);
+
+        CellsparseTrainTask task = CellsparseTrainTask.builder(qupath.getViewer(), command)
                 .endpointURL(url.toString())
                 .model(model)
                 .regionRequests(regionRequests)
                 .build();
         task.setOnSucceeded(event -> {
+            command.getProgressProperty().set(1);
             command.updateInfoText("Training is done");
         });
 
-        Future<?> future = CellsparseTaskUtils.submitTask(command, task);
+        task.setOnFailed(event -> {
+            Throwable ex = task.getException();
+            command.getProgressProperty().set(1);
+            command.updateInfoText("Task failed: " + ex.getMessage() + "\n"
+                    + "Please check that the samapi server (v0.4 and above) is running and the URL is correct.");
+            command.cancelAllTasks();
+        });
 
-        // Sychronize the results
-        try {
-            future.get();
-        } catch (CancellationException e) {
-            logger.warn("Task is cancelled", e);
-        } catch (ExecutionException e) {
-            logger.warn("Error while waiting for task to complete", e);
-        } catch (InterruptedException e) {
-            logger.warn("Task is interrupted", e);
-        }
+        task.setOnCancelled(event -> {
+            command.getProgressProperty().set(1);
+            command.updateInfoText("Task is cancelled");
+            command.cancelAllTasks();
+        });
+
+        new Thread(task).start();
     }
 
     /**
